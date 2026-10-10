@@ -1,0 +1,12 @@
+{
+  "name": "ox-quiz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "법학 객관식 대비 OX 퀴즈 (정적 웹앱 PoC)",
+  "scripts": {
+    "test": "node --test tests/",
+    "build:data": "python3 tools/build_dataset.py",
+    "serve": "python3 -m http.server 8080"
+  }
+}

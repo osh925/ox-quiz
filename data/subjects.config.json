@@ -1,0 +1,10 @@
+{
+  "subjects": [
+    {
+      "id": "civpro1-mid",
+      "name": "민사소송법1 중간",
+      "trueDocx": "data/src/jeongjimun.docx",
+      "falseDocx": "data/src/ojimun.docx"
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="OX 퀴즈" />
+  <meta name="format-detection" content="telephone=no" />
+  <title>OX 퀴즈 · 민사소송법</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="app" class="app">
+    <!-- 로딩 -->
+    <section id="screen-loading" class="screen active" aria-live="polite">
+      <div class="center muted">문항을 불러오는 중…</div>
+    </section>
+
+    <!-- 시작 화면 -->
+    <section id="screen-start" class="screen" aria-labelledby="start-title">
+      <header class="start-head">
+        <div class="logo" aria-hidden="true"><span class="o">O</span><span class="x">X</span></div>
+        <h1 id="start-title">OX 퀴즈</h1>
+        <p id="subject-title" class="muted small"></p>
+      </header>
+
+      <form id="start-form" class="card form" autocomplete="off">
+        <label class="field" id="subject-field" hidden>
+          <span>과목</span>
+          <select id="subject-select"></select>
+        </label>
+        <label class="field">
+          <span>범위</span>
+          <select id="section-select"></select>
+        </label>
+        <label class="field">
+          <span>한 라운드 문항 수 <b id="size-value">15</b>문항</span>
+          <input id="size-range" type="range" min="10" max="20" step="1" value="15" />
+          <span class="range-ticks small muted"><span>10</span><span>15</span><span>20</span></span>
+        </label>
+        <p class="small muted" id="pool-info"></p>
+        <button type="submit" class="btn primary big">시작하기</button>
+      </form>
+
+      <div class="card" id="history-card">
+        <h2 class="h2">최근 기록</h2>
+        <ul id="history-list" class="history"></ul>
+        <p id="history-empty" class="small muted">아직 기록이 없습니다.</p>
+        <button type="button" id="reset-btn" class="btn link small">기록 초기화</button>
+      </div>
+      <p class="footer small muted" id="data-version"></p>
+    </section>
+
+    <!-- 퀴즈 화면 -->
+    <section id="screen-quiz" class="screen" aria-label="문제">
+      <header class="quiz-top">
+        <button type="button" id="quit-btn" class="icon-btn" aria-label="그만하기">✕</button>
+        <div class="progress" aria-hidden="true"><div id="progress-bar" class="progress-bar"></div></div>
+        <div id="progress-text" class="progress-text">1 / 15</div>
+      </header>
+
+      <main class="quiz-main">
+        <p id="q-section" class="section-path"></p>
+        <div id="q-card" class="card statement">
+          <p id="q-text"></p>
+        </div>
+
+        <div id="feedback" class="feedback" hidden aria-live="assertive">
+          <div id="fb-title" class="fb-title"></div>
+          <div id="fb-original" class="fb-original" hidden>
+            <div class="small muted">원래 정지문 (바뀐 부분 강조)</div>
+            <p id="fb-original-text"></p>
+            <details id="fb-point" class="small" hidden>
+              <summary>변형 포인트 보기</summary>
+              <p id="fb-point-text"></p>
+            </details>
+          </div>
+        </div>
+      </main>
+
+      <footer class="quiz-actions">
+        <div id="ox-buttons" class="ox-buttons">
+          <button type="button" class="btn ox o" data-choice="O" aria-label="O (맞다)">O</button>
+          <button type="button" class="btn ox x" data-choice="X" aria-label="X (틀리다)">X</button>
+        </div>
+        <button type="button" id="next-btn" class="btn primary big" hidden>다음</button>
+      </footer>
+    </section>
+  </div>
+
+  <!-- 라운드 결과 모달 -->
+  <dialog id="result-dialog" class="dialog" aria-labelledby="result-title">
+    <h2 id="result-title">라운드 결과</h2>
+    <p class="score"><b id="result-correct">0</b><span> / </span><span id="result-attempted">0</span></p>
+    <p class="muted small">맞은 문항 수 / 시도 문항 수</p>
+    <p id="result-rate" class="rate"></p>
+    <div class="dialog-actions">
+      <button type="button" id="again-btn" class="btn primary big">다시 하기</button>
+      <button type="button" id="home-btn" class="btn ghost">처음으로</button>
+    </div>
+  </dialog>
+
+  <noscript>이 앱은 JavaScript가 필요합니다.</noscript>
+</body>
+</html>

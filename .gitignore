@@ -1,0 +1,9 @@
+node_modules/
+*.log
+.DS_Store
+# 원본 문서는 저장소에 올리지 않음 (로컬 전용)
+*.docx
+data/src/
+# 도구/스크린샷용 의존성
+.oxquiz-shot/
+package-lock.json
