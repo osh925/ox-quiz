@@ -454,3 +454,11 @@ async function init() {
 }
 
 init();
+
+// 설치 가능(PWA) 조건을 위한 서비스 워커 등록. 설치는 브라우저 메뉴(Chrome ⋮ → 앱 설치)로만 함.
+// beforeinstallprompt 는 가로채지 않음(preventDefault 호출 안 함) → 브라우저 기본 설치 UI 유지.
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { scope: './' }).catch((e) => console.warn('서비스 워커 등록 실패', e));
+  });
+}
