@@ -1,5 +1,6 @@
 // 헤드리스 크롬으로 모바일 화면 스크린샷 + 간단 E2E 확인.
 // 준비: puppeteer-core 설치된 폴더를 NODE_PATH 로 지정, 로컬 서버 실행 중이어야 함.
+// 로그인이 필요하므로 테스트 계정을 환경변수로: OX_NICK=... OX_PIN=...
 //   (임의 폴더에서) npm i puppeteer-core  →  NODE_PATH=<그 폴더>/node_modules node tools/screenshots.cjs [http://localhost:8080/]
 //   크롬 경로는 CHROME 환경변수로 지정(기본 /usr/bin/google-chrome)
 const puppeteer = require('puppeteer-core');
@@ -19,6 +20,13 @@ const CHROME = process.env.CHROME || '/usr/bin/google-chrome';
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
   });
   await page.goto(URL, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('#screen-start.active, #screen-auth.active');
+  if (await page.$('#screen-auth.active')) {
+    if (!process.env.OX_NICK || !process.env.OX_PIN) throw new Error('OX_NICK / OX_PIN 환경변수가 필요합니다');
+    await page.type('#login-username', process.env.OX_NICK);
+    await page.type('#login-pin', process.env.OX_PIN);
+    await page.click('#login-form button[type=submit]');
+  }
   await page.waitForSelector('#screen-start.active');
   await page.screenshot({ path: `${OUT}/01-start.png` });
 
@@ -116,10 +124,11 @@ const CHROME = process.env.CHROME || '/usr/bin/google-chrome';
   timed.afterAgain = { progress: await page.$eval('#progress-text', (e) => e.textContent), timer: await page.$eval('#timer-text', (e) => e.textContent) };
   await page.reload({ waitUntil: 'networkidle0' });
   await page.waitForSelector('#screen-start.active');
+  await page.waitForFunction(() => window.__oxquiz.state.server.pending === 0, { timeout: 20000 });
   timed.prefRestored = await page.$eval('#timer-options input:checked', (e) => e.value);
-  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('oxquiz.v1')));
-  timed.storedTimeouts = Object.values(stored.stats).reduce((n, s) => n + (s.timeout || 0), 0);
-  timed.lastRound = stored.rounds[stored.rounds.length - 1];
+  await page.evaluate(() => window.__oxquiz.state.server.refresh());
+  timed.lastRound = await page.evaluate(() => window.__oxquiz.state.server.rounds.find((r) => r.timer_sec === 10));
+  timed.storedTimeouts = timed.lastRound && timed.lastRound.timeouts;
 
   console.log(JSON.stringify({
     untimed: { feedbackTitles: [...new Set(log.map((l) => l.title))], result, afterAgain, timerHiddenUntimed, captured: [...done] },

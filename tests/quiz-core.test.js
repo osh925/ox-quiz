@@ -228,3 +228,111 @@ test('카운트다운: 백그라운드 탭(interval 멈춤) 후 복귀 시 check
   assert.equal(expired, 1, 'stop 시점에 만료 처리됨');
   assert.equal(env.active, 0);
 });
+
+// ---------------------------------------------------------------- 오답노트 / 동기화 큐 / 닉네임
+import {
+  applyWrongNote, activeWrongNotes, buildWrongNotePool, wrongNoteRoundSize, WRONG_NOTE_CLEAR_STREAK, findVariant,
+} from '../js/quiz-core.js';
+import { SyncQueue } from '../js/sync-queue.js';
+import { normalizeNickname, validateNickname, validatePin, nicknameToEmail, emailToNickname } from '../js/auth-utils.js';
+
+const att = (o) => ({ itemId: 's-0002', correct: false, mode: 'normal', variantId: null, at: '2026-10-10T00:00:00Z', ...o });
+
+test('오답노트: 오답이면 추가, 맞히면 일반 모드에서는 변화 없음', () => {
+  let n = applyWrongNote(null, att({ variantId: 's-0002-1' }));
+  assert.deepEqual(n, { item_id: 's-0002', wrong_count: 1, last_wrong_at: '2026-10-10T00:00:00Z', correct_streak: 0, cleared: false, cleared_at: null, last_variant_id: 's-0002-1' });
+  assert.equal(applyWrongNote(n, att({ correct: true })), n, '일반 모드 정답 → 그대로');
+  assert.equal(applyWrongNote(null, att({ correct: true, mode: 'wrongnote' })), null, '노트에 없던 항목 정답 → 없음');
+  n = applyWrongNote(n, att({ variantId: null, at: '2026-10-11T00:00:00Z' }));
+  assert.equal(n.wrong_count, 2); assert.equal(n.last_variant_id, null, '정지문을 틀리면 variant null');
+});
+
+test(`오답노트: 오답노트 모드에서 ${WRONG_NOTE_CLEAR_STREAK}연속 정답이면 빠지고, 다시 틀리면 복귀`, () => {
+  assert.equal(WRONG_NOTE_CLEAR_STREAK, 2);
+  let n = applyWrongNote(null, att({}));
+  n = applyWrongNote(n, att({ correct: true, mode: 'wrongnote' }));
+  assert.equal(n.correct_streak, 1); assert.equal(n.cleared, false);
+  n = applyWrongNote(n, att({ correct: false, mode: 'wrongnote' }));   // 중간에 틀림 → 리셋
+  assert.equal(n.correct_streak, 0); assert.equal(n.wrong_count, 2);
+  n = applyWrongNote(n, att({ correct: true, mode: 'wrongnote' }));
+  n = applyWrongNote(n, att({ correct: true, mode: 'wrongnote', at: '2026-10-12T00:00:00Z' }));
+  assert.equal(n.cleared, true); assert.equal(n.cleared_at, '2026-10-12T00:00:00Z');
+  assert.equal(applyWrongNote(n, att({ correct: true, mode: 'wrongnote' })), n, '빠진 뒤 정답 → 변화 없음');
+  n = applyWrongNote(n, att({ correct: false, mode: 'normal' }));    // 일반 모드에서 다시 틀림 → 복귀
+  assert.equal(n.cleared, false); assert.equal(n.correct_streak, 0); assert.equal(n.cleared_at, null); assert.equal(n.wrong_count, 3);
+  assert.equal(applyWrongNote(applyWrongNote(null, att({})), att({ correct: true, mode: 'wrongnote' }), 1).cleared, true, '기준값 설정 가능');
+});
+
+test('오답노트 풀/라운드 길이: 활성 항목만, 데이터셋에 없는 ID 무시, min(N, 개수)', () => {
+  const notes = {
+    's-0002': { item_id: 's-0002', cleared: false, last_wrong_at: '2026-10-10' },
+    's-0003': { item_id: 's-0003', cleared: true, last_wrong_at: '2026-10-11' },
+    'gone-0009': { item_id: 'gone-0009', cleared: false, last_wrong_at: '2026-10-12' },
+  };
+  assert.deepEqual(activeWrongNotes(notes).map((n) => n.item_id), ['gone-0009', 's-0002']);
+  const pool = buildWrongNotePool(fixture, notes);
+  assert.deepEqual(pool.map((p) => p.id), ['s-0002']);
+  assert.equal(wrongNoteRoundSize(15, 1), 1);
+  assert.equal(wrongNoteRoundSize(15, 40), 15);
+  assert.equal(wrongNoteRoundSize(15, 0), 0);
+  // 오답노트 모드도 같은 50/50 규칙 (pickQuestion 재사용)
+  const rng = mulberry32(5); let x = 0;
+  for (let i = 0; i < 20000; i++) if (pickQuestion(pool, rng).answer === 'X') x++;
+  near(x / 20000, 0.5, 0.02, '오답노트 X 비율');
+  assert.equal(findVariant(fixture.subjects[0].items[1], 's-0002-1').text, 'B는 거짓이다.');
+  assert.equal(findVariant(fixture.subjects[0].items[1], null), null);
+});
+
+function memStorage() {
+  const m = new Map();
+  return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+}
+
+test('동기화 큐: 순서 보장, 일시 오류면 멈추고 보존, 영구 오류는 버림, 재시작 후에도 유지', async () => {
+  const storage = memStorage();
+  const sent = []; let online = false;
+  const run = async (op) => {
+    if (!online) return 'retry';
+    if (op.bad) return 'drop';
+    sent.push(op.n); return 'ok';
+  };
+  const q = new SyncQueue({ storage, key: 'q', run });
+  q.push({ n: 1 }); q.push({ n: 2, bad: true }); q.push({ n: 3 });
+  assert.equal(await q.flush(), 3); assert.deepEqual(sent, []);
+  const q2 = new SyncQueue({ storage, key: 'q', run });   // 새로고침 후
+  assert.equal(q2.size, 3);
+  online = true;
+  assert.equal(await q2.flush(), 0);
+  assert.deepEqual(sent, [1, 3]);
+  assert.equal(q2.dropped.length, 1);
+  const q3 = new SyncQueue({ storage, key: 'q', run: async () => { throw new Error('network'); } });
+  q3.push({ n: 4 });
+  assert.equal(await q3.flush(), 1, '예외는 retry 로 취급');
+});
+
+test('동기화 큐: 빈 큐 flush 후에도 다음 flush 가 정상 동작 (회귀 테스트)', async () => {
+  const sent = [];
+  const q = new SyncQueue({ storage: memStorage(), key: 'q', run: async (op) => { sent.push(op.n); return 'ok'; } });
+  assert.equal(await q.flush(), 0);
+  assert.equal(q.flushing, null);
+  q.push({ n: 1 });
+  assert.equal(await q.flush(), 0);
+  assert.deepEqual(sent, [1]);
+  const [a, b] = [q.flush(), q.flush()];
+  assert.equal(a, b, '동시 호출은 같은 작업 공유');
+  await a;
+});
+
+test('닉네임/PIN: 정규화·검증·내부 이메일 변환', () => {
+  assert.equal(normalizeNickname('  Test 용A '), 'test용a');
+  assert.equal(nicknameToEmail('TEST용A'), nicknameToEmail('test용a'));
+  assert.match(nicknameToEmail('테스트b'), /^u[0-9a-f]+@ox-quiz\.invalid$/);
+  assert.equal(emailToNickname(nicknameToEmail('테스트b')), '테스트b');
+  assert.ok(nicknameToEmail('가나다라마바사아자차').split('@')[0].length <= 64);
+  assert.equal(validateNickname('test용a'), null);
+  assert.ok(validateNickname('a'));
+  assert.ok(validateNickname('가나다라마바사아자차카'));
+  assert.ok(validateNickname('a b!'));
+  assert.equal(validatePin('012345'), null);
+  assert.ok(validatePin('12345')); assert.ok(validatePin('12345a')); assert.ok(validatePin(''));
+});

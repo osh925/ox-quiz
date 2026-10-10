@@ -1,21 +1,26 @@
-// UI 계층: DOM 조작과 화면 전환만 담당. 출제/채점 규칙은 quiz-core.js, 저장은 storage.js.
+// UI 계층: DOM 조작과 화면 전환만 담당.
+//   출제/채점/오답노트 규칙 → quiz-core.js (순수 함수)
+//   서버 저장·인증 → supabase-store.js (SupabaseStore)
+//   기기별 설정(문항 수·범위·타이머) → storage.js (LocalProgressStore.prefs)
 import {
   buildPool, listSections, pickQuestion, grade, newRound, recordAnswer,
   isRoundOver, roundSummary, clampRoundSize, highlightOriginal,
   gradeTimeout, feedbackText, TIMER_OPTIONS, DEFAULT_TIMER_ID, getTimerOption,
+  activeWrongNotes, buildWrongNotePool, wrongNoteRoundSize, findVariant, WRONG_NOTE_CLEAR_STREAK,
 } from './quiz-core.js';
 import { createCountdown } from './timer.js';
 import { LocalProgressStore } from './storage.js';
+import { SupabaseStore } from './supabase-store.js';
 
 const DATA_URL = 'data/questions.json';
 const $ = (id) => document.getElementById(id);
 
-// 저장소 교체 지점: 백엔드 도입 시 여기서 다른 구현을 반환하면 됨.
-function createStore() { return new LocalProgressStore(); }
-
 const state = {
   data: null,
-  store: createStore(),
+  itemsById: new Map(),
+  store: new LocalProgressStore(),           // 기기별 설정(prefs)만
+  server: new SupabaseStore({ onSyncChange: (n) => renderSyncBanner(n) }),
+  mode: 'normal',                            // 'normal' | 'wrongnote'
   settings: { subjectId: null, sectionKey: '', roundSize: 15, timerId: DEFAULT_TIMER_ID },
   pool: [],
   round: null,
@@ -69,17 +74,144 @@ function updatePoolInfo() {
   $('subject-title').textContent = subj ? subj.title || subj.name : '';
 }
 
-async function renderHistory() {
-  const p = await state.store.load();
-  const list = $('history-list');
-  const recent = p.rounds.slice(-5).reverse();
-  list.innerHTML = recent.map((r) => {
-    const d = new Date(r.endedAt);
-    const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    return `<li><span>${when}</span><b>${r.correct} / ${r.attempted}</b></li>`;
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function renderHistory() {
+  const rounds = state.server.rounds;
+  $('history-list').innerHTML = rounds.map((r) => {
+    const tags = [r.mode === 'wrongnote' ? '<span class="tag">오답노트</span>' : '',
+      r.timer_sec ? `<span class="tag">${r.timer_sec}초</span>` : ''].join('');
+    return `<li><span>${fmtDate(r.finished_at || r.started_at)} ${tags}</span><b>${r.correct} / ${r.attempted}</b></li>`;
   }).join('');
-  $('history-empty').hidden = recent.length > 0;
-  $('reset-btn').hidden = recent.length === 0;
+  $('history-empty').hidden = rounds.length > 0;
+}
+
+function renderNotesCount() {
+  const n = activeWrongNotes(state.server.notes).length;
+  $('notes-count').textContent = n;
+  $('notes-sub').textContent = n ? `${WRONG_NOTE_CLEAR_STREAK}번 연속 맞히면 빠져요` : '틀린 문항을 모아 다시 풀어요';
+}
+
+function renderHome() {
+  $('user-nickname').textContent = state.server.profile?.nickname || '';
+  renderHistory();
+  renderNotesCount();
+}
+
+// 저장 대기 알림: 정상 전송 중의 잠깐(수백 ms) 대기는 표시하지 않고, 3초 넘게 남아 있을 때만 표시
+let syncBannerTimer = null;
+function renderSyncBanner(n) {
+  const el = $('sync-banner');
+  if (!el) return;
+  clearTimeout(syncBannerTimer);
+  if (!n) { el.hidden = true; el.textContent = ''; return; }
+  const paint = () => {
+    const left = state.server.pending;
+    el.hidden = !left;
+    el.textContent = left ? `⚠ 저장 대기 ${left}건 · 연결되면 자동으로 다시 보냅니다` : '';
+  };
+  if (!el.hidden) paint(); else syncBannerTimer = setTimeout(paint, 3000);
+}
+
+// ------------------------------------------------------------------ 로그인 / 가입
+function setAuthTab(which) {
+  const login = which === 'login';
+  $('tab-login').classList.toggle('active', login); $('tab-login').setAttribute('aria-selected', String(login));
+  $('tab-signup').classList.toggle('active', !login); $('tab-signup').setAttribute('aria-selected', String(!login));
+  $('login-form').hidden = !login; $('signup-form').hidden = login;
+  $('login-error').hidden = true; $('signup-error').hidden = true;
+  (login ? $('login-username') : $('signup-username')).focus({ preventScroll: true });
+}
+
+function showAuth() {
+  for (const id of ['login-pin', 'signup-pin', 'signup-pin2']) $(id).value = '';
+  setAuthTab('login');
+  show('auth');
+}
+
+async function handleAuthSubmit(e, kind) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const errEl = $(`${kind}-error`);
+  const btn = form.querySelector('button[type=submit]');
+  errEl.hidden = true;
+  const nick = $(`${kind}-username`).value;
+  const pin = $(`${kind}-pin`).value;
+  if (kind === 'signup' && pin !== $('signup-pin2').value) {
+    errEl.textContent = 'PIN 확인이 일치하지 않습니다.'; errEl.hidden = false; return;
+  }
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = kind === 'login' ? '로그인 중…' : '가입 중…';
+  try {
+    if (kind === 'login') await state.server.signIn(nick, pin);
+    else await state.server.signUp(nick, pin);
+    // 비밀번호 관리자가 "로그인 성공"으로 인식하도록: 폼을 숨기고(same-document) 주소 이력을 바꿈
+    history.pushState({ screen: 'home' }, '', '#home');
+    await enterHome();
+  } catch (err) {
+    errEl.textContent = err.message || String(err);
+    errEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function enterHome() {
+  renderHome();
+  show('start');
+  const ok = await state.server.refresh();
+  renderHome();
+  if (!ok && state.server.lastError) console.warn('서버 동기화 실패', state.server.lastError);
+}
+
+async function logout() {
+  const n = state.server.pending;
+  if (n && !confirm(`아직 서버에 저장되지 않은 기록이 ${n}건 있습니다. 이 기기에 보관했다가 다음에 로그인하면 보냅니다. 로그아웃할까요?`)) return;
+  stopTimer();
+  await state.server.signOut();
+  renderSyncBanner(0);
+  history.replaceState(null, '', location.pathname + location.search);
+  showAuth();
+}
+
+// ------------------------------------------------------------------ 오답노트 화면
+function renderNotes() {
+  const notes = activeWrongNotes(state.server.notes);
+  const rows = notes.map((n) => ({ n, item: state.itemsById.get(n.item_id) })).filter((r) => r.item);
+  $('notes-title-count').textContent = `(${rows.length})`;
+  $('notes-empty').hidden = rows.length > 0;
+  const size = wrongNoteRoundSize(state.settings.roundSize, rows.length);
+  const timer = getTimerOption(state.settings.timerId);
+  $('notes-help').textContent = rows.length
+    ? `오답노트 모드에서 ${WRONG_NOTE_CLEAR_STREAK}번 연속 맞히면 빠집니다. 한 라운드 ${size}문항 · 제한 시간 ${timer.label} (처음 화면에서 변경)`
+    : '';
+  const start = $('notes-start');
+  start.disabled = rows.length === 0;
+  start.textContent = rows.length ? `오답노트로 풀기 (${size}문항)` : '오답노트가 비어 있어요';
+  $('notes-list').innerHTML = rows.map(({ n, item }) => {
+    const v = findVariant(item, n.last_variant_id);
+    const missed = v
+      ? `<p class="small muted">틀렸던 오지문 (바뀐 부분 강조)</p><p>${highlightOriginal(item.answer, v.text)
+        .map((s) => (s.changed ? `<mark>${escapeHtml(s.text)}</mark>` : escapeHtml(s.text))).join('')}</p>`
+        + (v.point ? `<p class="small muted">〔${escapeHtml(v.point.type)}〕 ${escapeHtml(v.point.change)}</p>` : '')
+      : '<p class="small muted">정지문(옳은 지문)을 X로 답했거나 시간 초과로 틀렸어요.</p>';
+    return `<li class="card note">
+      <p class="section-path">${escapeHtml(item.section.join(' › '))}</p>
+      <p class="note-text">${escapeHtml(item.answer)}</p>
+      <p class="note-meta small muted">틀린 횟수 <b>${n.wrong_count}</b> · 마지막 ${fmtDate(n.last_wrong_at)} · 연속 정답 ${n.correct_streak}/${WRONG_NOTE_CLEAR_STREAK}</p>
+      <details><summary>틀렸던 지문 보기</summary>${missed}</details>
+    </li>`;
+  }).join('');
+}
+
+function openNotes() {
+  renderNotes();
+  show('notes');
 }
 
 function stopTimer() {
@@ -112,25 +244,41 @@ function goHome() {
   stopTimer();
   if ($('result-dialog').open) $('result-dialog').close();
   state.round = null;
-  renderHistory();
+  state.mode = 'normal';
+  renderHome();
   show('start');
 }
 
 // ------------------------------------------------------------------ 퀴즈 진행
-function startRound() {
-  if (!state.pool.length) { alert('선택한 범위에 문항이 없습니다.'); return; }
+function startRound(mode = state.mode) {
+  let pool, size;
+  if (mode === 'wrongnote') {
+    pool = buildWrongNotePool(state.data, state.server.notes);
+    size = wrongNoteRoundSize(state.settings.roundSize, pool.length);
+    if (!size) { alert('오답노트가 비어 있어요.'); goHome(); return; }
+  } else {
+    pool = state.pool;
+    size = state.settings.roundSize;
+    if (!pool.length) { alert('선택한 범위에 문항이 없습니다.'); return; }
+  }
   stopTimer();
-  state.round = newRound(state.settings.roundSize, {
+  state.mode = mode;
+  state.roundPool = pool; // 라운드 도중 오답노트에서 빠진 항목도 이번 라운드에서는 계속 출제 대상
+  const timer = getTimerOption(state.settings.timerId);
+  state.round = newRound(size, {
+    id: state.server.newRoundId(), mode,
     subjectId: state.settings.subjectId, sectionKey: state.settings.sectionKey, dataVersion: state.data.version,
-    timerId: getTimerOption(state.settings.timerId).id,
+    timerId: timer.id,
   });
+  state.server.startRound({ id: state.round.id, mode, timerSec: timer.seconds, total: size, startedAt: state.round.startedAt });
+  $('mode-badge').hidden = mode !== 'wrongnote';
   show('quiz');
   nextQuestion();
 }
 
 function nextQuestion() {
   if (isRoundOver(state.round)) { finishRound(); return; }
-  state.question = pickQuestion(state.pool);
+  state.question = pickQuestion(state.roundPool);
   state.answered = false;
   const q = state.question;
   const n = state.round.answered.length + 1;
@@ -164,7 +312,7 @@ function showResult(res) {
   state.timer = null; // 피드백 화면에선 타이머 없음 (마지막 남은 시간 표시만 유지)
   const q = state.question;
   state.round = recordAnswer(state.round, q, res);
-  state.store.recordAttempt(q, res);
+  state.server.recordAttempt(q, res, { mode: state.round.mode, roundId: state.round.id });
 
   for (const b of document.querySelectorAll('.btn.ox')) {
     b.disabled = true;
@@ -201,12 +349,12 @@ function showResult(res) {
 function finishRound() {
   stopTimer();
   const sum = roundSummary(state.round);
-  state.store.saveRound({
-    startedAt: new Date(state.round.startedAt).toISOString(), size: state.round.size,
-    attempted: sum.attempted, correct: sum.correct, timeouts: sum.timeouts, timerId: state.round.timerId,
-    subjectId: state.round.subjectId,
-    sectionKey: state.round.sectionKey, dataVersion: state.round.dataVersion,
+  state.server.saveRound({
+    id: state.round.id, mode: state.round.mode, timerSec: getTimerOption(state.round.timerId).seconds,
+    total: state.round.size, attempted: sum.attempted, correct: sum.correct, timeouts: sum.timeouts,
+    startedAt: state.round.startedAt,
   });
+  $('result-title').textContent = state.round.mode === 'wrongnote' ? '오답노트 라운드 결과' : '라운드 결과';
   $('result-correct').textContent = sum.correct;
   $('result-attempted').textContent = sum.attempted;
   $('result-rate').textContent = `정답률 ${Math.round(sum.rate * 100)}%` + (sum.timeouts ? ` · 시간 초과 ${sum.timeouts}` : '');
@@ -235,18 +383,26 @@ function bind() {
   });
   // 탭이 다시 보이면 즉시 남은 시간 재계산 (숨겨진 동안 만료됐으면 바로 시간 초과 처리)
   document.addEventListener('visibilitychange', () => { if (!document.hidden && state.timer) state.timer.check(); });
-  $('start-form').addEventListener('submit', (e) => { e.preventDefault(); startRound(); });
+  $('start-form').addEventListener('submit', (e) => { e.preventDefault(); startRound('normal'); });
   for (const b of document.querySelectorAll('.btn.ox')) b.addEventListener('click', () => answer(b.dataset.choice));
   $('next-btn').addEventListener('click', nextQuestion);
   $('quit-btn').addEventListener('click', () => {
     if (!state.round || state.round.answered.length === 0 || confirm('이번 라운드를 그만둘까요? (푼 문항의 오답 기록은 남습니다)')) goHome();
   });
-  $('again-btn').addEventListener('click', () => { $('result-dialog').close(); startRound(); });
+  $('again-btn').addEventListener('click', () => { $('result-dialog').close(); startRound(state.round?.mode || 'normal'); });
   $('home-btn').addEventListener('click', goHome);
   $('result-dialog').addEventListener('cancel', (e) => { e.preventDefault(); goHome(); });
-  $('reset-btn').addEventListener('click', async () => {
-    if (confirm('이 기기에 저장된 풀이 기록을 모두 지울까요?')) { await state.store.reset(); renderHistory(); }
-  });
+  // 인증
+  $('tab-login').addEventListener('click', () => setAuthTab('login'));
+  $('tab-signup').addEventListener('click', () => setAuthTab('signup'));
+  $('login-form').addEventListener('submit', (e) => handleAuthSubmit(e, 'login'));
+  $('signup-form').addEventListener('submit', (e) => handleAuthSubmit(e, 'signup'));
+  $('logout-btn').addEventListener('click', logout);
+  // 오답노트
+  $('notes-card').addEventListener('click', openNotes);
+  $('notes-back').addEventListener('click', goHome);
+  $('notes-start').addEventListener('click', () => startRound('wrongnote'));
+  window.addEventListener('popstate', () => { /* 화면 상태는 앱이 관리 (뒤로가기로 로그아웃되지 않게) */ });
   // 키보드(데스크톱): O/X 또는 ←/→, Enter/Space = 다음
   document.addEventListener('keydown', (e) => {
     if (!$('screen-quiz').classList.contains('active') || $('result-dialog').open) return;
@@ -259,6 +415,9 @@ function bind() {
 
 // ------------------------------------------------------------------ 시작
 async function init() {
+  let serverReady = false;
+  const serverInit = state.server.init().then((loggedIn) => { serverReady = true; return loggedIn; })
+    .catch((e) => { console.error(e); return null; });
   try {
     const res = await fetch(DATA_URL, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -267,6 +426,7 @@ async function init() {
     $('screen-loading').innerHTML = `<div class="center">문항 데이터를 불러오지 못했습니다.<br><span class="small muted">${escapeHtml(String(e))}</span></div>`;
     return;
   }
+  for (const s of state.data.subjects) for (const it of s.items) state.itemsById.set(it.id, it);
   const prefs = await state.store.getPrefs();
   state.settings = {
     subjectId: prefs.subjectId || state.data.subjects[0].id,
@@ -277,12 +437,20 @@ async function init() {
   $('size-range').value = state.settings.roundSize;
   $('size-value').textContent = state.settings.roundSize;
   fillSubjects(); fillSections(); fillTimerOptions(); updatePoolInfo();
-  $('data-version').textContent = `데이터 ${state.data.version} · ${state.data.generatedAt.slice(0, 10)}${state.store.volatile ? ' · ⚠ 기록 저장 불가(개인정보 보호 모드)' : ''}`;
+  $('data-version').textContent = `데이터 ${state.data.version} · ${state.data.generatedAt.slice(0, 10)}`;
   bind();
-  await renderHistory();
-  show('start');
-  // 디버그/스크린샷용 훅 (UI 동작에는 영향 없음)
+  // 디버그/테스트용 훅 (UI 동작에는 영향 없음)
   window.__oxquiz = { state, answer, nextQuestion, startRound };
+
+  const loggedIn = await serverInit;
+  if (!serverReady) {
+    showAuth();
+    $('auth-status').textContent = '⚠ 서버 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.';
+    for (const b of document.querySelectorAll('#screen-auth button[type=submit]')) b.disabled = true;
+    return;
+  }
+  if (loggedIn) await enterHome();
+  else showAuth();
 }
 
 init();

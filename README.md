@@ -4,7 +4,8 @@
 빌드 도구나 프레임워크 없이 `index.html + CSS + JS 모듈`로 되어 있고, 문항은 `data/questions.json` 하나에서 읽습니다.
 
 - 현재 데이터: 민사소송법1 중간 — 정지문 682개, 오지문 780개 (`data/build_report.txt` 참고)
-- 기록 저장: 각 기기의 브라우저(localStorage). 기기끼리 공유되지 않습니다.
+- **계정**: 닉네임 + 숫자 6자리 PIN. 기록과 오답노트는 **서버(Supabase)**에 저장되므로 기기를 바꿔도 이어서 풀 수 있습니다.
+- **오답노트**: 틀린 문항이 자동으로 모이고, 오답노트에 있는 문항만 골라 푸는 모드가 있습니다.
 
 ---
 
@@ -48,6 +49,20 @@ python3 -m http.server 8080         # http://localhost:8080 접속
   - 시간이 다 된 뒤의 탭이나 연타는 무시합니다. [다시 하기]나 [그만하기]를 누르면 타이머가 정리되고, interval이 남지 않습니다.
   - 남은 시간은 `시작 시각 + 제한 시간 − 현재 시각`으로 계산합니다(`js/timer.js`). 그래서 브라우저가 백그라운드 탭의 interval을 늦추거나 멈춰도 시간이 정확합니다. **탭이 숨겨져 있는 동안에도 시간은 흐릅니다(일시정지하지 않음).** 탭으로 돌아오면(`visibilitychange`) 즉시 다시 계산하고, 이미 시간이 지났으면 바로 시간 초과로 처리합니다.
   - 기록: 문항별 `stats[id].timeout`(wrong에도 포함), 라운드별 `timeouts`와 `timerId`. 결과 창에 `시간 초과 n`을 표시합니다.
+
+### 계정 · 오답노트
+
+- 처음 접속하면 **로그인 / 처음이에요(가입)** 화면이 나옵니다. 닉네임은 2~10자(한글·영문·숫자·`_ . -`)이고, 대소문자와 공백은 구분하지 않습니다(`Test 용A` = `test용a`). PIN은 숫자 6자리입니다.
+- 로그인 폼은 일반 `<form>`이고, `autocomplete="username"`, `current-password`/`new-password` 속성이 붙어 있습니다. 로그인에 성공하면 폼을 숨기고 `history.pushState('#home')`을 호출하므로, Chrome·Safari 비밀번호 관리자가 닉네임과 PIN 저장을 제안합니다.
+- 로그인 세션은 브라우저에 유지됩니다(supabase-js `persistSession`). 오른쪽 위 **로그아웃** 버튼으로 끝낼 수 있습니다.
+- **오답노트 규칙**(`quiz-core.js`의 `applyWrongNote`와 DB 함수 `record_attempt`가 같은 규칙을 따름):
+  - 묶음 단위는 **정지문**입니다. 정지문을 X라고 답하거나 그 정지문의 오지문을 O라고 답하면(시간 초과 포함) 해당 정지문이 오답노트에 들어가고, 틀린 횟수와 마지막으로 틀린 지문(오지문 ID)이 기록됩니다.
+  - **오답노트 모드에서 2번 연속 맞히면**(`WRONG_NOTE_CLEAR_STREAK = 2`) 오답노트에서 빠집니다. 일반 모드에서 맞힌 것은 횟수에 들어가지 않습니다.
+  - 어느 모드에서든 다시 틀리면 연속 정답 수가 0이 되고, 빠졌던 문항도 다시 들어옵니다.
+- **오답노트 화면**: 섹션 경로, 정지문, 틀린 횟수, 마지막으로 틀린 날짜, 연속 정답 수를 보여 줍니다. '틀렸던 지문 보기'를 펼치면 틀렸던 오지문이 바뀐 부분 강조와 함께 나옵니다.
+- **오답노트로 풀기**: 출제 규칙(50/50, 오지문 균등)과 제한 시간 옵션은 일반 모드와 같고, 활성 오답노트 항목에서만 출제합니다. 라운드 길이는 `min(설정한 문항 수, 오답노트 항목 수)`이고(복원 추출), 항목이 0개면 버튼이 비활성화됩니다. 라운드 도중에 빠진 항목도 그 라운드가 끝날 때까지는 계속 나올 수 있습니다.
+- **저장 실패**: 모든 저장은 큐(`js/sync-queue.js`, localStorage)를 거칩니다. 네트워크가 끊기면 쌓아 두고, 다시 연결되거나(online 이벤트) 30초마다 순서대로 다시 보냅니다. 3초 넘게 남아 있으면 화면 아래에 작은 '저장 대기 n건' 알림이 뜹니다. 같은 응답이 두 번 저장되지 않도록 응답마다 `client_id`를 붙입니다. 오프라인에서도 오답노트와 기록은 로컬 캐시로 바로 갱신됩니다.
+- 이전 버전에서 localStorage에만 저장하던 기록은 **서버로 옮기지 않습니다**(가져오기 기능 없음). 이전 데이터는 기기에 그대로 남아 있지만 화면에 표시하지 않습니다.
 
 - 문제 번호(예: `13-1`)는 정답을 알려 주는 셈이라 화면에 표시하지 않습니다.
 - 데스크톱 단축키: `O`/`←` = O, `X`/`→` = X, `Enter` = 다음.
@@ -144,8 +159,12 @@ ox-quiz/
 ├─ js/
 │  ├─ quiz-core.js         ★ 순수 로직: 출제(pickQuestion)·채점(grade)·라운드·섹션 필터·diff. DOM 의존 없음
 │  ├─ timer.js             문항당 카운트다운(타임스탬프 기반, 시계/스케줄러 주입 → 테스트 가능)
-│  ├─ storage.js           진행 기록 저장소(LocalProgressStore). 모든 메서드가 Promise를 돌려줌 → 백엔드로 교체 가능
-│  └─ app.js               UI 계층(화면 전환, 이벤트). createStore()가 저장소 교체 지점
+│  ├─ auth-utils.js        닉네임 정규화·검증, 닉네임 → 내부 이메일 변환 (순수 함수)
+│  ├─ sync-queue.js        저장 재시도 큐 (localStorage 영속, 순서 보장, 순수 로직)
+│  ├─ supabase-store.js    서버 저장소: 인증, 라운드·응답 저장, 오답노트 조회, 오프라인 캐시
+│  ├─ config.js            Supabase URL / publishable key / supabase-js CDN 주소
+│  ├─ storage.js           기기별 설정(문항 수·범위·타이머) 저장 (LocalProgressStore.prefs)
+│  └─ app.js               UI 계층(로그인, 홈, 오답노트, 퀴즈, 결과)
 ├─ data/
 │  ├─ subjects.config.json 과목 목록과 원본 docx 경로
 │  ├─ src/*.docx           원본 문서 (로컬 전용, git 제외)
@@ -154,14 +173,67 @@ ox-quiz/
 ├─ tools/
 │  ├─ build_dataset.py     docx → JSON 파서·검증
 │  ├─ make_icons.py        아이콘 생성(Pillow)
-│  └─ screenshots.cjs      헤드리스 크롬 E2E + 스크린샷(puppeteer-core 필요)
+│  ├─ screenshots.cjs      헤드리스 크롬 퀴즈/타이머 E2E + 스크린샷 (OX_NICK/OX_PIN 필요)
+│  └─ e2e-supabase.cjs     실제 Supabase 대상 E2E: 가입·로그인·RLS·오답노트·오프라인 큐·지속성
+├─ supabase/
+│  ├─ migrations/*.sql     DB 스키마·RLS·record_attempt 함수 (적용된 마이그레이션 원본)
+│  └─ functions/signup/    가입 Edge Function (닉네임+PIN → Auth 사용자 생성)
 ├─ tests/quiz-core.test.js node --test: 확률 분포 시뮬레이션, 채점 분기, 시간 초과 채점, 타이머(가짜 시계), 라운드, 저장소, 전체 데이터 diff
 └─ screenshots/            모바일 화면 캡처
 ```
 
-**localStorage 저장 형태** (key `oxquiz.v1`):
-`{schema, userId(기기별 익명 ID), prefs{roundSize, subjectId, sectionKey, timerId}, rounds[최근 200개 {startedAt, endedAt, size, attempted, correct, timeouts, timerId, subjectId, sectionKey, dataVersion}], stats{[문항ID]: {seen, wrong, timeout, lastSeenAt, lastWrongAt}}}`
-문항ID는 정지문 ID 또는 오지문 ID입니다. 정지문 단위로 합치려면 ID 앞부분(`civpro1-mid-0013`)으로 묶으면 됩니다.
+### 서버 구조 (Supabase)
+
+- 프로젝트: `ox-quiz` (ref `pmplhnxhxdbuqoflgthb`, 서울 `ap-northeast-2`, Free 플랜, 조직 LawTF)
+- 클라이언트는 supabase-js v2를 CDN ESM으로 불러옵니다(빌드 없음). 커밋된 publishable key는 공개되어도 괜찮은 키이고, 데이터는 **RLS**로 보호합니다(모든 테이블에서 `auth.uid() = user_id`인 행만 읽고 쓸 수 있음. anon 역할은 테이블 접근 권한 없음).
+
+**인증 방식**: Supabase Auth의 이메일+비밀번호 방식을 그대로 씁니다.
+- 닉네임을 정규화(NFKC, 공백 제거, 소문자)한 뒤 UTF-8 hex로 바꿔 **내부 이메일** `u<hex>@ox-quiz.invalid`로 만듭니다. 예: `test용a` → `u74657374ec9aa961@ox-quiz.invalid`. `.invalid`는 예약 도메인이라 메일이 실제로 발송되지 않습니다.
+- PIN이 곧 비밀번호입니다(6자리, Supabase 최소 길이 6자).
+- **가입**은 Edge Function `signup`이 처리합니다(Admin API, `email_confirm: true`). 그래서 대시보드에서 'Confirm email'을 끄지 않아도 바로 로그인할 수 있습니다. 닉네임 중복은 이메일 고유성으로 막고, 이미 있으면 409를 돌려줍니다.
+- publishable key는 JWT가 아니므로 이 함수는 `verify_jwt=false`로 배포했습니다. 대신 함수 안에서 입력을 직접 검증합니다. 공개 키만 있으면 누구나 부를 수 있다는 점에서 Supabase 기본 signUp과 같은 수준입니다.
+- 로그인은 클라이언트가 `signInWithPassword`를 직접 호출합니다.
+
+**테이블** (`supabase/migrations/20261010090000_init_schema.sql`)
+
+| 테이블 | 주요 컬럼 | 비고 |
+|---|---|---|
+| `profiles` | user_id(PK), nickname(표시용), nickname_norm(unique) | auth.users에 사용자가 생기면 트리거(`private.handle_new_user`)가 자동 생성 |
+| `rounds` | id(클라이언트 UUID), mode(normal/wrongnote), timer_sec, total, attempted, correct, timeouts, started_at, finished_at | 시작할 때 행을 만들고 끝날 때 갱신. 중간에 그만둔 라운드는 finished_at이 null |
+| `attempts` | client_id(중복 방지), item_id(정지문 ID), variant_id(오지문 ID 또는 null), shown_type(O/X), user_answer(O/X, 시간 초과면 null), correct, timed_out, mode, round_id, created_at | `unique(user_id, client_id)` |
+| `wrong_notes` | (user_id, item_id) PK, wrong_count, last_wrong_at, correct_streak, cleared, cleared_at, last_variant_id | 오답노트 |
+
+**RPC** `record_attempt(...)`: `SECURITY INVOKER` 함수라 RLS가 그대로 적용됩니다. 응답 저장과 오답노트 갱신을 **한 트랜잭션에서 원자적으로** 처리하고, 같은 `client_id`로 다시 호출되면 아무것도 바꾸지 않습니다.
+
+**스키마를 바꿀 때**: `supabase/migrations/`에 새 SQL 파일을 추가하고, Supabase SQL Editor(또는 CLI `supabase db push`)로 적용합니다.
+
+**기기별 localStorage 키**
+- `oxquiz.auth`: 로그인 세션
+- `oxquiz.v1`: 설정(prefs)
+- `oxquiz.queue.<userId>`: 저장 대기 큐
+- `oxquiz.cache.<userId>`: 최근 기록·오답노트 캐시
+
+### 관리자 작업 (Supabase 대시보드)
+
+- **PIN 초기화**:
+  1. 대시보드 → Table Editor → `profiles`에서 닉네임을 찾아 `user_id`를 확인합니다.
+  2. Authentication → Users에서 그 사용자(내부 이메일 `u…@ox-quiz.invalid`)를 찾습니다. 사용자 메타데이터에도 닉네임이 들어 있습니다.
+  3. **⋯ → Reset password는 메일을 보내는 기능이라 쓸 수 없습니다.** 대신 SQL Editor에서 실행하세요:
+     ```sql
+     update auth.users set encrypted_password = crypt('새PIN6자리', gen_salt('bf'))
+     where id = (select user_id from public.profiles where nickname_norm = '정규화된닉네임');
+     ```
+     (정규화된 닉네임 = 소문자·공백 제거. 예: `Test 용A` → `test용a`)
+- **사용자 삭제**: Authentication → Users에서 삭제하면 프로필·기록·오답노트가 함께 지워집니다(`on delete cascade`).
+- **닉네임 변경**: 내부 이메일이 닉네임에서 만들어지므로 간단하지 않습니다. 현재는 지원하지 않습니다(필요하면 auth.users.email과 profiles를 함께 바꿔야 함).
+
+### 한계 · 보안 메모
+
+- **PIN 6자리는 약한 비밀번호입니다.** 경우의 수가 100만 가지라, 닉네임을 아는 사람이 오래 무차별 대입하면 뚫릴 수 있습니다. Supabase Auth의 IP별 요청 제한이 어느 정도 막아 주지만, 시험 대비 기록 정도의 낮은 민감도에만 맞는 설계입니다. 민감한 정보는 저장하지 마세요.
+- 보안 어드바이저의 'Leaked Password Protection Disabled' 경고는 **일부러 무시했습니다.** 이 기능을 켜면 대부분의 6자리 숫자 PIN이 유출 목록에 걸려 가입할 수 없습니다(게다가 유료 플랜 기능).
+- PIN을 잊으면 본인이 재설정할 수 없고 관리자가 초기화해야 합니다(위 SQL 참고).
+- Supabase Free 플랜 프로젝트는 **1주일 동안 활동이 없으면 일시 중지**됩니다. 대시보드에서 Restore를 누르면 다시 켜집니다.
+- 가입 Edge Function의 CORS 허용 목록은 `https://osh925.github.io`와 `localhost:8080`입니다. 도메인을 바꾸면 `supabase/functions/signup/index.ts`의 `ALLOWED_ORIGINS`를 고치고 다시 배포하세요.
 
 ---
 
@@ -179,9 +251,9 @@ ox-quiz/
 
 ## 8. 로드맵
 
-1. **공유 백엔드**(Supabase 또는 Firebase): 기기를 바꿔도 기록이 이어지게 하고, 사용자별 통계를 모읍니다. `storage.js`와 같은 인터페이스로 `RemoteProgressStore`를 만들고, 오프라인일 때는 로컬에 쌓았다가 동기화합니다.
-2. **인증**: 이메일 매직링크나 카카오/구글 로그인. 지금의 익명 `userId`는 처음 로그인할 때 계정으로 옮깁니다.
-3. **오답 복습 모드**: `stats.wrong`이 많은 문항 위주로 출제하는 범위 옵션.
+1. ~~공유 백엔드~~ · ~~계정~~ · ~~오답노트 모드~~ → 완료(Supabase, 닉네임+PIN)
+2. 더 강한 인증(카카오/구글 OAuth, 또는 PIN 시도 횟수 제한 Edge Function), 사용자가 직접 PIN 변경
+3. 이전 localStorage 기록을 서버로 가져오기, 문항별 정답률 통계 화면(attempts 집계)
 4. **간격 반복(SRS)**: 문항별 다음 복습일(SM-2/Leitner)을 두고, 그날 볼 문항을 우선 출제합니다. 이때 `pickQuestion`에 가중치 전략을 주입합니다(지금의 균등 규칙은 기본 전략으로 남김).
 5. **여러 과목**: config에 과목을 추가합니다. 과목이 많아지면 `questions.json`을 과목별 파일로 나누고 필요할 때 불러옵니다.
 6. **관리자 편집**: 웹에서 지문을 고치거나 신고받기(오탈자·정답 오류). 백엔드 도입 후 docx 대신 DB를 원본으로 삼을지 결정합니다.

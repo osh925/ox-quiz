@@ -210,3 +210,55 @@ export function highlightOriginal(from, to) {
   }
   return out;
 }
+
+// ------------------------------------------------------------ 오답노트 (서버 record_attempt 함수와 같은 규칙)
+// 묶음 단위 = 정지문(item). 정지문이든 그 오지문이든 틀리면 해당 정지문이 오답노트에 들어감.
+// 오답노트 모드에서 WRONG_NOTE_CLEAR_STREAK 번 연속으로 맞히면 오답노트에서 빠짐(cleared).
+// 어디서든 다시 틀리면 연속 정답 수가 0 이 되고 다시 활성화됨.
+export const WRONG_NOTE_CLEAR_STREAK = 2;
+
+/**
+ * 오답노트 항목 1개 갱신 (순수 함수). note 가 없으면 null 로 전달.
+ * attempt: { itemId, correct, mode: 'normal'|'wrongnote', variantId|null, at: ISO }
+ * 반환: 새 note 객체 또는 (변화 없음이면) 기존 note 그대로 / null
+ */
+export function applyWrongNote(note, attempt, clearStreak = WRONG_NOTE_CLEAR_STREAK) {
+  const at = attempt.at || new Date().toISOString();
+  if (!attempt.correct) {
+    return {
+      item_id: attempt.itemId,
+      wrong_count: (note?.wrong_count || 0) + 1,
+      last_wrong_at: at,
+      correct_streak: 0,
+      cleared: false,
+      cleared_at: null,
+      last_variant_id: attempt.variantId ?? null,
+    };
+  }
+  if (attempt.mode === 'wrongnote' && note && !note.cleared) {
+    const streak = note.correct_streak + 1;
+    const cleared = streak >= Math.max(1, clearStreak);
+    return { ...note, correct_streak: streak, cleared, cleared_at: cleared ? at : null };
+  }
+  return note ?? null;
+}
+
+/** 활성(아직 안 빠진) 오답노트 항목, 최근 틀린 순 */
+export function activeWrongNotes(notes) {
+  return Object.values(notes || {}).filter((n) => n && !n.cleared)
+    .sort((a, b) => String(b.last_wrong_at).localeCompare(String(a.last_wrong_at)));
+}
+
+/** 오답노트 모드 출제 풀: 활성 오답노트 항목 중 현재 데이터셋에 있는 정지문만 */
+export function buildWrongNotePool(dataset, notes) {
+  const active = new Set(activeWrongNotes(notes).map((n) => n.item_id));
+  return buildPool(dataset).filter((it) => active.has(it.id));
+}
+
+/** 오답노트 라운드 길이 = min(설정값, 항목 수). 항목이 0 이면 0 (시작 불가) */
+export const wrongNoteRoundSize = (requested, count) => Math.max(0, Math.min(requested, count));
+
+/** 오지문 ID → 오지문 객체 찾기 (오답노트 화면 표시용) */
+export function findVariant(item, variantId) {
+  return variantId ? (item.wrongs || []).find((w) => w.id === variantId) || null : null;
+}

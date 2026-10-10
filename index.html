@@ -23,13 +23,67 @@
       <div class="center muted">문항을 불러오는 중…</div>
     </section>
 
-    <!-- 시작 화면 -->
-    <section id="screen-start" class="screen" aria-labelledby="start-title">
+    <!-- 로그인 / 가입 화면 -->
+    <section id="screen-auth" class="screen" aria-labelledby="auth-title">
       <header class="start-head">
         <div class="logo" aria-hidden="true"><span class="o">O</span><span class="x">X</span></div>
-        <h1 id="start-title">OX 퀴즈</h1>
-        <p id="subject-title" class="muted small"></p>
+        <h1 id="auth-title">OX 퀴즈</h1>
+        <p class="muted small">닉네임과 숫자 6자리 PIN으로 기록을 저장해요. 다른 기기에서도 이어서 풀 수 있어요.</p>
       </header>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" id="tab-login" class="tab active" aria-selected="true" aria-controls="login-form">로그인</button>
+        <button type="button" role="tab" id="tab-signup" class="tab" aria-selected="false" aria-controls="signup-form">처음이에요 (가입)</button>
+      </div>
+
+      <!-- 비밀번호 관리자 호환: 실제 form + username/password 필드 + autocomplete -->
+      <form id="login-form" class="card form" method="post" action="#" novalidate>
+        <label class="field">
+          <span>닉네임</span>
+          <input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none"
+                 autocorrect="off" spellcheck="false" required minlength="2" maxlength="20" />
+        </label>
+        <label class="field">
+          <span>PIN (숫자 6자리)</span>
+          <input id="login-pin" name="password" type="password" autocomplete="current-password" inputmode="numeric"
+                 pattern="[0-9]{6}" minlength="6" maxlength="6" required />
+        </label>
+        <p class="form-error" id="login-error" role="alert" hidden></p>
+        <button type="submit" class="btn primary big">로그인</button>
+      </form>
+
+      <form id="signup-form" class="card form" method="post" action="#" novalidate hidden>
+        <label class="field">
+          <span>닉네임 <small class="muted">(2~10자, 한글·영문·숫자·_ . -)</small></span>
+          <input id="signup-username" name="username" type="text" autocomplete="username" autocapitalize="none"
+                 autocorrect="off" spellcheck="false" required minlength="2" maxlength="20" />
+        </label>
+        <label class="field">
+          <span>PIN 정하기 (숫자 6자리)</span>
+          <input id="signup-pin" name="new-password" type="password" autocomplete="new-password" inputmode="numeric"
+                 pattern="[0-9]{6}" minlength="6" maxlength="6" required />
+        </label>
+        <label class="field">
+          <span>PIN 확인</span>
+          <input id="signup-pin2" name="confirm-password" type="password" autocomplete="new-password" inputmode="numeric"
+                 pattern="[0-9]{6}" minlength="6" maxlength="6" required />
+        </label>
+        <p class="small muted">PIN은 잊으면 관리자만 초기화할 수 있어요. 브라우저의 비밀번호 저장 기능을 써도 좋아요.</p>
+        <p class="form-error" id="signup-error" role="alert" hidden></p>
+        <button type="submit" class="btn primary big">가입하고 시작</button>
+      </form>
+      <p class="footer small muted" id="auth-status"></p>
+    </section>
+
+    <!-- 시작 화면 -->
+    <section id="screen-start" class="screen" aria-labelledby="start-title">
+      <header class="home-head">
+        <div>
+          <h1 id="start-title" class="home-title">OX 퀴즈</h1>
+          <p class="small muted"><b id="user-nickname"></b> 님</p>
+        </div>
+        <button type="button" id="logout-btn" class="btn ghost small-btn">로그아웃</button>
+      </header>
+      <p id="subject-title" class="muted small"></p>
 
       <form id="start-form" class="card form" autocomplete="off">
         <label class="field" id="subject-field" hidden>
@@ -53,13 +107,31 @@
         <button type="submit" class="btn primary big">시작하기</button>
       </form>
 
+      <button type="button" id="notes-card" class="card notes-card">
+        <span><b>오답노트</b><br /><span class="small muted" id="notes-sub">틀린 문항을 모아 다시 풀어요</span></span>
+        <span class="notes-count"><b id="notes-count">0</b>개 ›</span>
+      </button>
+
       <div class="card" id="history-card">
-        <h2 class="h2">최근 기록</h2>
+        <h2 class="h2">풀이 기록</h2>
         <ul id="history-list" class="history"></ul>
         <p id="history-empty" class="small muted">아직 기록이 없습니다.</p>
-        <button type="button" id="reset-btn" class="btn link small">기록 초기화</button>
       </div>
       <p class="footer small muted" id="data-version"></p>
+    </section>
+
+    <!-- 오답노트 화면 -->
+    <section id="screen-notes" class="screen" aria-labelledby="notes-title">
+      <header class="quiz-top">
+        <button type="button" id="notes-back" class="icon-btn" aria-label="뒤로">‹</button>
+        <h1 id="notes-title" class="notes-title">오답노트 <span id="notes-title-count" class="muted"></span></h1>
+      </header>
+      <p class="small muted" id="notes-help"></p>
+      <ul id="notes-list" class="notes-list"></ul>
+      <p id="notes-empty" class="card small muted center-text" hidden>오답노트가 비어 있어요. 문제를 풀다 틀리면 여기에 모입니다.</p>
+      <footer class="quiz-actions">
+        <button type="button" id="notes-start" class="btn primary big">오답노트로 풀기</button>
+      </footer>
     </section>
 
     <!-- 퀴즈 화면 -->
@@ -69,6 +141,7 @@
         <div class="progress" aria-hidden="true"><div id="progress-bar" class="progress-bar"></div></div>
         <div id="progress-text" class="progress-text">1 / 15</div>
       </header>
+      <p id="mode-badge" class="mode-badge" hidden>오답노트 모드</p>
       <div id="timer" class="timer" hidden role="timer" aria-live="off">
         <div class="timer-track"><div id="timer-bar" class="timer-bar"></div></div>
         <span id="timer-text" class="timer-text"></span>
@@ -116,6 +189,7 @@
     </div>
   </dialog>
 
+  <div id="sync-banner" class="sync-banner" hidden role="status"></div>
   <noscript>이 앱은 JavaScript가 필요합니다.</noscript>
 </body>
 </html>
