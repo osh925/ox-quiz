@@ -45,6 +45,10 @@
           <input id="size-range" type="range" min="10" max="20" step="1" value="15" />
           <span class="range-ticks small muted"><span>10</span><span>15</span><span>20</span></span>
         </label>
+        <fieldset class="field seg-group">
+          <legend>문항당 제한 시간</legend>
+          <div id="timer-options" class="segmented" role="radiogroup"></div>
+        </fieldset>
         <p class="small muted" id="pool-info"></p>
         <button type="submit" class="btn primary big">시작하기</button>
       </form>
@@ -65,6 +69,10 @@
         <div class="progress" aria-hidden="true"><div id="progress-bar" class="progress-bar"></div></div>
         <div id="progress-text" class="progress-text">1 / 15</div>
       </header>
+      <div id="timer" class="timer" hidden role="timer" aria-live="off">
+        <div class="timer-track"><div id="timer-bar" class="timer-bar"></div></div>
+        <span id="timer-text" class="timer-text"></span>
+      </div>
 
       <main class="quiz-main">
         <p id="q-section" class="section-path"></p>
@@ -73,6 +81,7 @@
         </div>
 
         <div id="feedback" class="feedback" hidden aria-live="assertive">
+          <span id="fb-label" class="fb-label" hidden></span>
           <div id="fb-title" class="fb-title"></div>
           <div id="fb-original" class="fb-original" hidden>
             <div class="small muted">원래 정지문 (바뀐 부분 강조)</div>

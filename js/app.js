@@ -2,7 +2,9 @@
 import {
   buildPool, listSections, pickQuestion, grade, newRound, recordAnswer,
   isRoundOver, roundSummary, clampRoundSize, highlightOriginal,
+  gradeTimeout, feedbackText, TIMER_OPTIONS, DEFAULT_TIMER_ID, getTimerOption,
 } from './quiz-core.js';
+import { createCountdown } from './timer.js';
 import { LocalProgressStore } from './storage.js';
 
 const DATA_URL = 'data/questions.json';
@@ -14,11 +16,12 @@ function createStore() { return new LocalProgressStore(); }
 const state = {
   data: null,
   store: createStore(),
-  settings: { subjectId: null, sectionKey: '', roundSize: 15 },
+  settings: { subjectId: null, sectionKey: '', roundSize: 15, timerId: DEFAULT_TIMER_ID },
   pool: [],
   round: null,
   question: null,
   answered: false,
+  timer: null, // 현재 문항의 카운트다운 (무제한이면 null)
 };
 
 // ------------------------------------------------------------------ 공통
@@ -51,6 +54,13 @@ function fillSections() {
   sel.value = state.settings.sectionKey;
 }
 
+function fillTimerOptions() {
+  const box = $('timer-options');
+  box.innerHTML = TIMER_OPTIONS.map((o) => `
+    <label class="seg"><input type="radio" name="timer" value="${o.id}"${o.id === state.settings.timerId ? ' checked' : ''} />
+    <span>${escapeHtml(o.label)}</span></label>`).join('');
+}
+
 function updatePoolInfo() {
   state.pool = buildPool(state.data, { subjectId: state.settings.subjectId, sectionPrefix: sectionPrefixOf(state.settings.sectionKey) });
   const wrongs = state.pool.reduce((n, it) => n + it.wrongs.length, 0);
@@ -72,7 +82,34 @@ async function renderHistory() {
   $('reset-btn').hidden = recent.length === 0;
 }
 
+function stopTimer() {
+  if (state.timer) state.timer.stop();
+  state.timer = null;
+}
+
+function renderTimer(remainingMs, totalMs) {
+  const sec = Math.ceil(remainingMs / 1000);
+  $('timer-text').textContent = `${sec}초`;
+  $('timer-bar').style.transform = `scaleX(${totalMs ? remainingMs / totalMs : 0})`;
+  $('timer').classList.toggle('urgent', remainingMs <= 3000);
+}
+
+function startQuestionTimer() {
+  stopTimer();
+  const opt = getTimerOption(state.round.timerId);
+  $('timer').hidden = !opt.seconds;
+  if (!opt.seconds) return;
+  const q = state.question;
+  state.timer = createCountdown({
+    seconds: opt.seconds,
+    onTick: renderTimer,
+    onExpire: () => { if (state.question === q && !state.answered) showResult({ ...gradeTimeout(q), ms: opt.seconds * 1000 }); },
+  });
+  state.timer.start();
+}
+
 function goHome() {
+  stopTimer();
   if ($('result-dialog').open) $('result-dialog').close();
   state.round = null;
   renderHistory();
@@ -82,8 +119,10 @@ function goHome() {
 // ------------------------------------------------------------------ 퀴즈 진행
 function startRound() {
   if (!state.pool.length) { alert('선택한 범위에 문항이 없습니다.'); return; }
+  stopTimer();
   state.round = newRound(state.settings.roundSize, {
     subjectId: state.settings.subjectId, sectionKey: state.settings.sectionKey, dataVersion: state.data.version,
+    timerId: getTimerOption(state.settings.timerId).id,
   });
   show('quiz');
   nextQuestion();
@@ -103,23 +142,40 @@ function nextQuestion() {
   $('next-btn').hidden = true;
   for (const b of document.querySelectorAll('.btn.ox')) { b.disabled = false; b.classList.remove('chosen'); }
   $('ox-buttons').hidden = false;
+  startQuestionTimer(); // 문제가 화면에 표시된 뒤에 시작
 }
 
 function answer(choice) {
   if (state.answered || !state.question) return;
+  let ms = null;
+  if (state.timer) {
+    const inTime = state.timer.stop(); // 만료 후 늦은 탭이면 false → 무시 (만료 처리는 onExpire 가 함)
+    if (!inTime) return;
+    ms = state.timer.elapsedMs();
+  }
+  showResult({ ...grade(state.question, choice), ms });
+}
+
+/** 채점 결과 표시 (사용자 응답 / 시간 초과 공통). 이 화면에서는 타이머가 돌지 않음. */
+function showResult(res) {
+  if (state.answered) return;
   state.answered = true;
+  if (state.timer && state.timer.status === 'running') state.timer.stop();
+  state.timer = null; // 피드백 화면에선 타이머 없음 (마지막 남은 시간 표시만 유지)
   const q = state.question;
-  const res = grade(q, choice);
   state.round = recordAnswer(state.round, q, res);
   state.store.recordAttempt(q, res);
 
   for (const b of document.querySelectorAll('.btn.ox')) {
     b.disabled = true;
-    b.classList.toggle('chosen', b.dataset.choice === choice);
+    b.classList.toggle('chosen', b.dataset.choice === res.choice);
   }
   const fb = $('feedback');
   fb.className = `feedback ${res.correct ? 'ok' : 'ng'}`;
-  $('fb-title').textContent = res.correct ? '⭕ 정답' : '❌ 오답';
+  const txt = feedbackText(res);
+  $('fb-title').textContent = txt.title;
+  $('fb-label').textContent = txt.label;
+  $('fb-label').hidden = !txt.label;
   const orig = $('fb-original');
   orig.hidden = !res.showOriginal;
   if (res.showOriginal) {
@@ -143,15 +199,17 @@ function answer(choice) {
 }
 
 function finishRound() {
+  stopTimer();
   const sum = roundSummary(state.round);
   state.store.saveRound({
     startedAt: new Date(state.round.startedAt).toISOString(), size: state.round.size,
-    attempted: sum.attempted, correct: sum.correct, subjectId: state.round.subjectId,
+    attempted: sum.attempted, correct: sum.correct, timeouts: sum.timeouts, timerId: state.round.timerId,
+    subjectId: state.round.subjectId,
     sectionKey: state.round.sectionKey, dataVersion: state.round.dataVersion,
   });
   $('result-correct').textContent = sum.correct;
   $('result-attempted').textContent = sum.attempted;
-  $('result-rate').textContent = `정답률 ${Math.round(sum.rate * 100)}%`;
+  $('result-rate').textContent = `정답률 ${Math.round(sum.rate * 100)}%` + (sum.timeouts ? ` · 시간 초과 ${sum.timeouts}` : '');
   const dlg = $('result-dialog');
   if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
 }
@@ -170,6 +228,13 @@ function bind() {
     $('size-value').textContent = state.settings.roundSize;
   });
   $('size-range').addEventListener('change', () => state.store.savePrefs(state.settings));
+  $('timer-options').addEventListener('change', (e) => {
+    if (e.target.name !== 'timer') return;
+    state.settings.timerId = getTimerOption(e.target.value).id;
+    state.store.savePrefs(state.settings);
+  });
+  // 탭이 다시 보이면 즉시 남은 시간 재계산 (숨겨진 동안 만료됐으면 바로 시간 초과 처리)
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.timer) state.timer.check(); });
   $('start-form').addEventListener('submit', (e) => { e.preventDefault(); startRound(); });
   for (const b of document.querySelectorAll('.btn.ox')) b.addEventListener('click', () => answer(b.dataset.choice));
   $('next-btn').addEventListener('click', nextQuestion);
@@ -207,10 +272,11 @@ async function init() {
     subjectId: prefs.subjectId || state.data.subjects[0].id,
     sectionKey: prefs.sectionKey || '',
     roundSize: clampRoundSize(prefs.roundSize ?? 15),
+    timerId: getTimerOption(prefs.timerId).id,
   };
   $('size-range').value = state.settings.roundSize;
   $('size-value').textContent = state.settings.roundSize;
-  fillSubjects(); fillSections(); updatePoolInfo();
+  fillSubjects(); fillSections(); fillTimerOptions(); updatePoolInfo();
   $('data-version').textContent = `데이터 ${state.data.version} · ${state.data.generatedAt.slice(0, 10)}${state.store.volatile ? ' · ⚠ 기록 저장 불가(개인정보 보호 모드)' : ''}`;
   bind();
   await renderHistory();

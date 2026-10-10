@@ -87,6 +87,35 @@ export function grade(question, choice) {
   return { correct, feedback, showOriginal: feedback === 'wrong-false', choice };
 }
 
+/**
+ * 시간 초과 채점: 항상 오답. 오답 규칙은 grade() 와 동일
+ * (오지문이면 원래 정지문 표시, 정지문이면 '오답'만).
+ */
+export function gradeTimeout(question) {
+  const feedback = question.kind === 'true' ? 'wrong-true' : 'wrong-false';
+  return { correct: false, feedback, showOriginal: feedback === 'wrong-false', choice: null, timedOut: true };
+}
+
+/** 피드백 문구 (UI 표시용, 테스트 가능하도록 여기 둠) */
+export function feedbackText(result) {
+  return {
+    title: result.correct ? '정답입니다' : '오답입니다',
+    label: result.timedOut ? '시간 초과' : '',
+  };
+}
+
+// ------------------------------------------------------------ 문항당 제한 시간 옵션
+// 옵션 추가는 이 배열에만 하면 됨 (seconds: 0 = 무제한, 타이머 UI 없음). id 는 localStorage 에 저장되므로 바꾸지 말 것.
+export const TIMER_OPTIONS = Object.freeze([
+  { id: 'none', label: '무제한', seconds: 0 },
+  { id: '10s', label: '10초', seconds: 10 },
+  { id: '30s', label: '30초', seconds: 30 },
+]);
+export const DEFAULT_TIMER_ID = 'none';
+export function getTimerOption(id) {
+  return TIMER_OPTIONS.find((o) => o.id === id) || TIMER_OPTIONS.find((o) => o.id === DEFAULT_TIMER_ID);
+}
+
 /** 라운드 상태 (불변 객체로 다룸) */
 export function newRound(size, meta = {}) {
   const n = Math.max(1, Math.floor(size));
@@ -97,7 +126,8 @@ export function recordAnswer(round, question, result) {
     ...round,
     answered: [...round.answered, {
       statementId: question.statementId, itemId: question.itemId, kind: question.kind,
-      choice: result.choice, correct: result.correct, at: Date.now(),
+      choice: result.choice, correct: result.correct, timedOut: !!result.timedOut,
+      ms: result.ms ?? null, at: Date.now(),
     }],
   };
 }
@@ -105,7 +135,8 @@ export const isRoundOver = (round) => round.answered.length >= round.size;
 export function roundSummary(round) {
   const attempted = round.answered.length;
   const correct = round.answered.filter((a) => a.correct).length;
-  return { attempted, correct, wrong: attempted - correct, rate: attempted ? correct / attempted : 0 };
+  const timeouts = round.answered.filter((a) => a.timedOut).length;
+  return { attempted, correct, wrong: attempted - correct, timeouts, rate: attempted ? correct / attempted : 0 };
 }
 
 export const clampRoundSize = (n, min = 10, max = 20, dflt = 15) => {

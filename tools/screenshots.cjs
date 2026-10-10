@@ -58,12 +58,72 @@ const CHROME = process.env.CHROME || '/usr/bin/google-chrome';
   const result = await page.evaluate(() => `${document.getElementById('result-correct').textContent}/${document.getElementById('result-attempted').textContent}`);
   await page.tap('#again-btn');
   await page.waitForSelector('#screen-quiz.active');
-  const progress = await page.$eval('#progress-text', (e) => e.textContent);
+  const afterAgain = await page.$eval('#progress-text', (e) => e.textContent);
+  const timerHiddenUntimed = await page.$eval('#timer', (e) => e.hidden);
+
+  // ---------------- 10초 타이머 라운드
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await page.tap('#quit-btn').catch(() => {});
+  page.once('dialog', (d) => d.accept());
+  await page.evaluate(() => document.getElementById('quit-btn').click());
+  await page.waitForSelector('#screen-start.active');
+  await page.tap('#timer-options input[value="10s"]');
+  await page.$eval('#size-range', (e) => { e.value = 10; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.screenshot({ path: `${OUT}/01b-start-timer-10s.png` });
+  await page.tap('#start-form button[type=submit]');
+  await page.waitForSelector('#screen-quiz.active');
+  const timed = { checks: [] };
+  let timeoutDone = false, runningShot = false;
+  for (let i = 0; i < 10; i++) {
+    await page.waitForSelector('#ox-buttons:not([hidden])');
+    const q = await page.evaluate(() => window.__oxquiz.state.question.kind);
+    const t0 = await page.$eval('#timer-text', (e) => e.textContent);
+    if (!timeoutDone && q === 'false') {
+      await sleep(3000);
+      if (!runningShot) { runningShot = true; await page.screenshot({ path: `${OUT}/07-timer-running.png` }); }
+      await page.waitForSelector('#feedback:not([hidden])', { timeout: 15000 });
+      const fb = await page.evaluate(() => ({
+        title: document.getElementById('fb-title').textContent,
+        label: document.getElementById('fb-label').hidden ? '' : document.getElementById('fb-label').textContent,
+        original: !document.getElementById('fb-original').hidden,
+        timer: document.getElementById('timer-text').textContent,
+        answered: window.__oxquiz.state.round.answered.length,
+      }));
+      // 시간 초과 후 늦은 탭(중복 입력) 무시 확인
+      await page.evaluate(() => { window.__oxquiz.answer('O'); window.__oxquiz.answer('X'); });
+      const answeredAfterTaps = await page.evaluate(() => window.__oxquiz.state.round.answered.length);
+      await sleep(1500);
+      const timerAfter = await page.$eval('#timer-text', (e) => e.textContent);
+      timed.timeout = { startTimer: t0, ...fb, answeredAfterTaps, timerAfter1500ms: timerAfter };
+      await sleep(200);
+      await page.screenshot({ path: `${OUT}/08-timeout-feedback.png` });
+      timeoutDone = true;
+    } else {
+      await sleep(2300);
+      await page.tap(`.btn.ox[data-choice="${q === 'true' ? 'O' : 'X'}"]`);
+      await page.waitForSelector('#feedback:not([hidden])');
+      const frozen1 = await page.$eval('#timer-text', (e) => e.textContent);
+      await sleep(1200);
+      const frozen2 = await page.$eval('#timer-text', (e) => e.textContent);
+      timed.checks.push({ i: i + 1, startTimer: t0, frozen1, frozen2 });
+    }
+    await page.tap('#next-btn');
+  }
+  await page.waitForSelector('#result-dialog[open]');
+  timed.resultRate = await page.$eval('#result-rate', (e) => e.textContent);
+  await page.tap('#again-btn');
+  await page.waitForSelector('#ox-buttons:not([hidden])');
+  timed.afterAgain = { progress: await page.$eval('#progress-text', (e) => e.textContent), timer: await page.$eval('#timer-text', (e) => e.textContent) };
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('#screen-start.active');
+  timed.prefRestored = await page.$eval('#timer-options input:checked', (e) => e.value);
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('oxquiz.v1')));
+  timed.storedTimeouts = Object.values(stored.stats).reduce((n, s) => n + (s.timeout || 0), 0);
+  timed.lastRound = stored.rounds[stored.rounds.length - 1];
+
   console.log(JSON.stringify({
-    feedbackLog: log, result, afterAgain: progress,
-    storedRounds: stored.rounds.length, storedStats: Object.keys(stored.stats).length,
-    captured: [...done], errors,
+    untimed: { feedbackTitles: [...new Set(log.map((l) => l.title))], result, afterAgain, timerHiddenUntimed, captured: [...done] },
+    timed, errors,
   }, null, 1));
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });

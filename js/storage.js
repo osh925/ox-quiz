@@ -7,9 +7,9 @@
 //   schema: 1,
 //   userId: "u-xxxx",                // 기기별 익명 ID (백엔드 도입 시 계정 ID로 매핑)
 //   createdAt: ISO,
-//   prefs: { roundSize, subjectId, sectionKey },
-//   rounds: [ { startedAt, endedAt, size, attempted, correct, subjectId, sectionKey, dataVersion } ],  // 최근 MAX_ROUNDS개
-//   stats: { [statementId]: { seen, wrong, lastSeenAt, lastWrongAt } }   // statementId = 정지문 ID 또는 오지문 ID
+//   prefs: { roundSize, subjectId, sectionKey, timerId },
+//   rounds: [ { startedAt, endedAt, size, attempted, correct, timeouts, timerId, subjectId, sectionKey, dataVersion } ],  // 최근 MAX_ROUNDS개
+//   stats: { [statementId]: { seen, wrong, timeout, lastSeenAt, lastWrongAt } }   // timeout ⊂ wrong   // statementId = 정지문 ID 또는 오지문 ID
 // }
 
 const MAX_ROUNDS = 200;
@@ -66,6 +66,7 @@ export class LocalProgressStore {
     st.seen++;
     st.lastSeenAt = now;
     if (!result.correct) { st.wrong++; st.lastWrongAt = now; }
+    if (result.timedOut) st.timeout = (st.timeout || 0) + 1;
     this._write();
   }
 

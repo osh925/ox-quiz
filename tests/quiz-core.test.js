@@ -137,3 +137,94 @@ test('실제 데이터셋 전체: 모든 오지문 diff 결과를 이어 붙이�
     assert.ok(segs.some((s) => s.changed) || it.answer.length < w.text.length, `${w.id} 표시할 차이 없음`);
   }
 });
+
+// ---------------------------------------------------------------- 피드백 문구 / 시간 초과 / 타이머
+import { gradeTimeout, feedbackText, TIMER_OPTIONS, DEFAULT_TIMER_ID, getTimerOption } from '../js/quiz-core.js';
+import { createCountdown } from '../js/timer.js';
+
+test('피드백 문구: O/X 기호 없이 정답입니다 / 오답입니다, 시간 초과 라벨', () => {
+  const t = { kind: 'true', answer: 'O' }, f = { kind: 'false', answer: 'X' };
+  assert.deepEqual(feedbackText(grade(t, 'O')), { title: '정답입니다', label: '' });
+  assert.deepEqual(feedbackText(grade(t, 'X')), { title: '오답입니다', label: '' });
+  assert.deepEqual(feedbackText(grade(f, 'O')), { title: '오답입니다', label: '' });
+  assert.deepEqual(feedbackText(gradeTimeout(f)), { title: '오답입니다', label: '시간 초과' });
+});
+
+test('시간 초과 채점: 항상 오답, 오지문이면 정지문 표시 / 정지문이면 오답만', () => {
+  const t = { kind: 'true', answer: 'O', statementId: 'a', itemId: 'a' };
+  const f = { kind: 'false', answer: 'X', statementId: 'a-1', itemId: 'a' };
+  assert.deepEqual(gradeTimeout(t), { correct: false, feedback: 'wrong-true', showOriginal: false, choice: null, timedOut: true });
+  assert.deepEqual(gradeTimeout(f), { correct: false, feedback: 'wrong-false', showOriginal: true, choice: null, timedOut: true });
+  let r = newRound(10);
+  r = recordAnswer(r, t, gradeTimeout(t));
+  r = recordAnswer(r, f, grade(f, 'X'));
+  assert.deepEqual(roundSummary(r), { attempted: 2, correct: 1, wrong: 1, timeouts: 1, rate: 0.5 });
+});
+
+test('제한 시간 옵션: 기본 무제한, 모르는 id 는 기본값으로', () => {
+  assert.equal(DEFAULT_TIMER_ID, 'none');
+  assert.deepEqual(TIMER_OPTIONS.map((o) => o.seconds), [0, 10, 30]);
+  assert.equal(getTimerOption('10s').seconds, 10);
+  assert.equal(getTimerOption('bogus').id, 'none');
+  assert.equal(getTimerOption(undefined).id, 'none');
+});
+
+/** 가짜 시계 + 가짜 setInterval */
+function fakeEnv() {
+  let t = 1_000_000;
+  const timers = new Map(); let seq = 0;
+  return {
+    now: () => t,
+    setIntervalFn: (fn, ms) => { timers.set(++seq, { fn, ms }); return seq; },
+    clearIntervalFn: (h) => timers.delete(h),
+    /** ms 만큼 시간을 흘리며 interval 콜백 실행. skipTicks=true 면 콜백 없이 시간만 흐름(백그라운드 탭) */
+    advance(ms, step = 100, skipTicks = false) {
+      for (let k = 0; k < ms; k += step) { t += step; if (!skipTicks) for (const { fn } of [...timers.values()]) fn(); }
+    },
+    get active() { return timers.size; },
+  };
+}
+
+test('카운트다운: 타임스탬프 기준 만료, onExpire 한 번, 만료 후 interval 해제', () => {
+  const env = fakeEnv(); const ticks = []; let expired = 0;
+  const c = createCountdown({ seconds: 10, ...env, onTick: (r) => ticks.push(r), onExpire: () => expired++ });
+  c.start();
+  assert.equal(ticks[0], 10000); assert.equal(env.active, 1);
+  env.advance(9900);
+  assert.equal(expired, 0); assert.equal(c.remainingMs(), 100);
+  env.advance(100);
+  assert.equal(expired, 1); assert.equal(c.status, 'expired'); assert.equal(env.active, 0);
+  env.advance(5000);
+  assert.equal(expired, 1, '두 번 만료되지 않음');
+  assert.equal(c.stop(), false, '만료 후 늦은 탭은 무효');
+});
+
+test('카운트다운: 답하면 즉시 멈추고, 피드백 화면 동안 tick/expire 없음', () => {
+  const env = fakeEnv(); let ticks = 0; let expired = 0;
+  const c = createCountdown({ seconds: 10, ...env, onTick: () => ticks++, onExpire: () => expired++ });
+  c.start();
+  env.advance(3000);
+  assert.equal(c.stop(), true);
+  assert.equal(c.elapsedMs(), 3000);
+  const ticksAtStop = ticks;
+  env.advance(20000);           // 피드백 화면에서 오래 머묾
+  c.check();                    // visibilitychange 등으로 불려도
+  assert.equal(ticks, ticksAtStop, 'tick 없음');
+  assert.equal(expired, 0, '만료 없음');
+  assert.equal(c.remainingMs(), 7000, '남은 시간 고정');
+  assert.equal(env.active, 0, 'interval 누수 없음');
+  assert.equal(c.stop(), false, '중복 stop 무해');
+  assert.throws(() => c.start(), '재사용 불가 → 다음 문제는 새 타이머');
+});
+
+test('카운트다운: 백그라운드 탭(interval 멈춤) 후 복귀 시 check() 로 정확히 만료', () => {
+  const env = fakeEnv(); let expired = 0;
+  const c = createCountdown({ seconds: 10, ...env, onExpire: () => expired++ });
+  c.start();
+  env.advance(12000, 100, true); // interval 이 전혀 돌지 않음
+  assert.equal(expired, 0);
+  assert.equal(c.remainingMs(), 0, '남은 시간은 시계 기준');
+  assert.equal(c.stop(), false, '복귀 직후 탭해도 이미 시간 초과');
+  assert.equal(expired, 1, 'stop 시점에 만료 처리됨');
+  assert.equal(env.active, 0);
+});
