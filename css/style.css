@@ -176,3 +176,19 @@ details summary { cursor: pointer; margin-top: 8px; color: var(--muted); }
   background: #92400e; color: #fff; font-size: .78rem; padding: 4px 12px; border-radius: 99px; opacity: .92; pointer-events: none;
   max-width: 92vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* 오답노트 삭제 / 숨긴 오지문 */
+.note-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.note-actions details { flex: 1; min-width: 0; }
+.note-del { color: var(--ng); border-color: var(--ng) !important; flex: none; }
+.hidden-section { margin-top: 12px; }
+.hidden-section summary { font-weight: 700; color: var(--text); margin: 0; }
+.hidden-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 10px; }
+.hidden-list li { border-top: 1px dashed var(--line); padding-top: 8px; }
+.hidden-list li p { margin: 0 0 6px; line-height: 1.65; }
+.dialog-left { text-align: left; max-height: 86dvh; overflow: auto; }
+.dialog-left h2 { font-size: 1.1rem; line-height: 1.45; }
+.dismiss-item { margin: 6px 0; line-height: 1.65; background: var(--bg); border-radius: 10px; padding: 10px; }
+.variant-pick { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.pick { display: flex; gap: 10px; align-items: flex-start; background: var(--bg); border-radius: 10px; padding: 10px; cursor: pointer; line-height: 1.65; }
+.pick input { width: 22px; height: 22px; flex: none; margin-top: 3px; accent-color: var(--ng); }

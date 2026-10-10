@@ -240,7 +240,7 @@ const att = (o) => ({ itemId: 's-0002', correct: false, mode: 'normal', variantI
 
 test('오답노트: 오답이면 추가, 맞히면 일반 모드에서는 변화 없음', () => {
   let n = applyWrongNote(null, att({ variantId: 's-0002-1' }));
-  assert.deepEqual(n, { item_id: 's-0002', wrong_count: 1, last_wrong_at: '2026-10-10T00:00:00Z', correct_streak: 0, cleared: false, cleared_at: null, last_variant_id: 's-0002-1' });
+  assert.deepEqual(n, { item_id: 's-0002', wrong_count: 1, last_wrong_at: '2026-10-10T00:00:00Z', correct_streak: 0, cleared: false, cleared_at: null, last_variant_id: 's-0002-1', dismissed: false, dismissed_at: null });
   assert.equal(applyWrongNote(n, att({ correct: true })), n, '일반 모드 정답 → 그대로');
   assert.equal(applyWrongNote(null, att({ correct: true, mode: 'wrongnote' })), null, '노트에 없던 항목 정답 → 없음');
   n = applyWrongNote(n, att({ variantId: null, at: '2026-10-11T00:00:00Z' }));
@@ -335,4 +335,64 @@ test('닉네임/PIN: 정규화·검증·내부 이메일 변환', () => {
   assert.ok(validateNickname('a b!'));
   assert.equal(validatePin('012345'), null);
   assert.ok(validatePin('12345')); assert.ok(validatePin('12345a')); assert.ok(validatePin(''));
+});
+
+// ---------------------------------------------------------------- 오답노트 삭제 / 숨긴 오지문
+import { visibleWrongs, dismissWrongNote, missedVariantsForNote } from '../js/quiz-core.js';
+
+test('숨긴 오지문: X 쪽에서 숨긴 오지문은 제외, 나머지 오지문은 균등, 50/50 유지', () => {
+  const pool = buildPool(fixture, { sectionPrefix: ['Ⅱ. C'] }); // C: 오지문 2개
+  const hidden = new Set(['s-0003-1']);
+  const rng = mulberry32(11); const c = {}; const N = 40000;
+  for (let i = 0; i < N; i++) { const q = pickQuestion(pool, rng, hidden); c[q.statementId] = (c[q.statementId] || 0) + 1; }
+  assert.equal(c['s-0003-1'], undefined, '숨긴 오지문은 출제되지 않음');
+  near(c['s-0003'] / N, 0.5, 0.01, '정지문 50%');
+  near(c['s-0003-2'] / N, 0.5, 0.01, '남은 오지문 50%');
+});
+
+test('숨긴 오지문: 모두 숨기면 정지문만 (오지문 없음 규칙과 동일), 다른 문항은 영향 없음', () => {
+  const pool = buildPool(fixture);
+  const hidden = new Set(['s-0003-1', 's-0003-2']);
+  const rng = mulberry32(12); let cTotal = 0, cO = 0, bX = 0, bTotal = 0;
+  for (let i = 0; i < 60000; i++) {
+    const q = pickQuestion(pool, rng, hidden);
+    if (q.itemId === 's-0003') { cTotal++; if (q.answer === 'O') cO++; assert.equal(q.kind, 'true'); }
+    if (q.itemId === 's-0002') { bTotal++; if (q.answer === 'X') bX++; }
+  }
+  assert.equal(cO, cTotal, '전부 숨긴 문항은 항상 O');
+  near(cTotal / 60000, 1 / 3, 0.01, '문항 선택 확률은 그대로');
+  near(bX / bTotal, 0.5, 0.015, '다른 문항의 50/50 그대로');
+  assert.deepEqual(visibleWrongs(fixture.subjects[0].items[2], hidden), []);
+  assert.equal(visibleWrongs(fixture.subjects[0].items[2], null).length, 2);
+  // hidden 을 안 넘기면 기존 동작과 완전히 같음 (같은 시드 → 같은 결과)
+  const r1 = mulberry32(3), r2 = mulberry32(3);
+  for (let i = 0; i < 500; i++) assert.deepEqual(pickQuestion(pool, r1), pickQuestion(pool, r2, new Set()));
+});
+
+test('오답노트 삭제: dismissed → 목록에서 빠짐, 다시 틀리면 복귀', () => {
+  let n = applyWrongNote(null, att({ variantId: 's-0002-1' }));
+  n = dismissWrongNote(n, '2026-10-12T00:00:00Z');
+  assert.equal(n.dismissed, true); assert.equal(n.cleared, true); assert.equal(n.dismissed_at, '2026-10-12T00:00:00Z');
+  assert.deepEqual(activeWrongNotes({ [n.item_id]: n }), []);
+  assert.equal(applyWrongNote(n, att({ correct: true, mode: 'wrongnote' })), n, '삭제된 항목은 정답으로 변하지 않음');
+  n = applyWrongNote(n, att({ variantId: null }));
+  assert.equal(n.dismissed, false); assert.equal(n.cleared, false); assert.equal(n.wrong_count, 2);
+  assert.equal(activeWrongNotes({ [n.item_id]: n }).length, 1);
+  assert.equal(dismissWrongNote(null), null);
+});
+
+test('삭제 확인창의 틀렸던 오지문 목록: 최근순·중복 제거·숨긴 것/없는 ID 제외', () => {
+  const item = fixture.subjects[0].items[2]; // s-0003, 오지문 -1, -2
+  const attempts = [
+    { variant_id: 's-0003-1', correct: false, created_at: '2026-10-01' },
+    { variant_id: 's-0003-2', correct: false, created_at: '2026-10-03' },
+    { variant_id: 's-0003-2', correct: true, created_at: '2026-10-04' },
+    { variant_id: null, correct: false, created_at: '2026-10-05' },
+    { variant_id: 's-0003-9', correct: false, created_at: '2026-10-06' },
+  ];
+  const note = { last_variant_id: 's-0003-1' };
+  assert.deepEqual(missedVariantsForNote(item, note, attempts).map((v) => v.id), ['s-0003-1', 's-0003-2']);
+  assert.deepEqual(missedVariantsForNote(item, { last_variant_id: null }, attempts).map((v) => v.id), ['s-0003-2', 's-0003-1']);
+  assert.deepEqual(missedVariantsForNote(item, note, attempts, new Set(['s-0003-1'])).map((v) => v.id), ['s-0003-2']);
+  assert.deepEqual(missedVariantsForNote(item, { last_variant_id: null }, []), [], '정지문만 틀렸으면 빈 목록');
 });

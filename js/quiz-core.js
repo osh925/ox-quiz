@@ -53,14 +53,16 @@ export function listSections(dataset, subjectId, maxDepth = 2) {
  *  1) 정지문을 균등 확률로 선택
  *  2) 50%: 정지문 그대로 (정답 O)
  *  3) 50%: 그 정지문의 오지문 중 하나를 균등 확률로 (정답 X)
- *     - 오지문이 없으면 정지문을 그대로 출제 (정답 O)
+ *     - 사용자가 숨긴 오지문(hidden: Set<오지문ID>)은 후보에서 제외
+ *     - 남은 오지문이 없으면(원래 없거나 전부 숨김) 정지문을 그대로 출제 (정답 O)
  */
-export function pickQuestion(pool, rng = Math.random) {
+export function pickQuestion(pool, rng = Math.random, hidden = null) {
   if (!pool.length) throw new Error('출제할 문항이 없습니다.');
   const item = pool[randInt(pool.length, rng)];
   const showWrong = rng() < 0.5;
-  if (showWrong && item.wrongs && item.wrongs.length) {
-    const w = item.wrongs[randInt(item.wrongs.length, rng)];
+  const candidates = visibleWrongs(item, hidden);
+  if (showWrong && candidates.length) {
+    const w = candidates[randInt(candidates.length, rng)];
     return {
       itemId: item.id, statementId: w.id, no: w.no, kind: 'false', answer: 'X',
       text: w.text, original: item.answer, point: w.point || null, section: item.section,
@@ -69,8 +71,14 @@ export function pickQuestion(pool, rng = Math.random) {
   return {
     itemId: item.id, statementId: item.id, no: String(item.no), kind: 'true', answer: 'O',
     text: item.answer, original: item.answer, point: null, section: item.section,
-    fallback: showWrong, // 오지문이 없어 정지문으로 대체된 경우 true
+    fallback: showWrong, // 오지문이 없거나 전부 숨겨져 정지문으로 대체된 경우 true
   };
+}
+
+/** 숨기지 않은 오지문 목록 */
+export function visibleWrongs(item, hidden = null) {
+  const ws = item.wrongs || [];
+  return hidden && hidden.size ? ws.filter((w) => !hidden.has(w.id)) : ws;
 }
 
 /**
@@ -233,6 +241,8 @@ export function applyWrongNote(note, attempt, clearStreak = WRONG_NOTE_CLEAR_STR
       cleared: false,
       cleared_at: null,
       last_variant_id: attempt.variantId ?? null,
+      dismissed: false,
+      dismissed_at: null,
     };
   }
   if (attempt.mode === 'wrongnote' && note && !note.cleared) {
@@ -261,4 +271,25 @@ export const wrongNoteRoundSize = (requested, count) => Math.max(0, Math.min(req
 /** 오지문 ID → 오지문 객체 찾기 (오답노트 화면 표시용) */
 export function findVariant(item, variantId) {
   return variantId ? (item.wrongs || []).find((w) => w.id === variantId) || null : null;
+}
+
+/** 사용자가 오답노트에서 직접 삭제 (서버 dismiss_wrong_note 와 같은 규칙). 다시 틀리면 applyWrongNote 가 되살림 */
+export function dismissWrongNote(note, at = new Date().toISOString()) {
+  if (!note) return null;
+  return { ...note, cleared: true, dismissed: true, dismissed_at: at, correct_streak: 0 };
+}
+
+/**
+ * 삭제 확인창에 보여 줄 '틀렸던 오지문' 목록 (최근 것부터, 중복 제거, 이미 숨긴 것·데이터에 없는 것 제외).
+ * attempts: [{ variant_id, correct, created_at }] (해당 정지문의 응답들), note.last_variant_id 도 포함.
+ */
+export function missedVariantsForNote(item, note, attempts = [], hidden = null) {
+  const ids = [];
+  const seen = new Set();
+  const push = (id) => { if (id && !seen.has(id)) { seen.add(id); ids.push(id); } };
+  push(note?.last_variant_id);
+  [...attempts].filter((a) => a && !a.correct && a.variant_id)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .forEach((a) => push(a.variant_id));
+  return ids.map((id) => findVariant(item, id)).filter((v) => v && !(hidden && hidden.has(v.id)));
 }

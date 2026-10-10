@@ -7,6 +7,7 @@ import {
   isRoundOver, roundSummary, clampRoundSize, highlightOriginal,
   gradeTimeout, feedbackText, TIMER_OPTIONS, DEFAULT_TIMER_ID, getTimerOption,
   activeWrongNotes, buildWrongNotePool, wrongNoteRoundSize, findVariant, WRONG_NOTE_CLEAR_STREAK,
+  missedVariantsForNote,
 } from './quiz-core.js';
 import { createCountdown } from './timer.js';
 import { LocalProgressStore } from './storage.js';
@@ -204,9 +205,76 @@ function renderNotes() {
       <p class="section-path">${escapeHtml(item.section.join(' › '))}</p>
       <p class="note-text">${escapeHtml(item.answer)}</p>
       <p class="note-meta small muted">틀린 횟수 <b>${n.wrong_count}</b> · 마지막 ${fmtDate(n.last_wrong_at)} · 연속 정답 ${n.correct_streak}/${WRONG_NOTE_CLEAR_STREAK}</p>
-      <details><summary>틀렸던 지문 보기</summary>${missed}</details>
+      <div class="note-actions">
+        <details><summary>틀렸던 지문 보기</summary>${missed}</details>
+        <button type="button" class="btn ghost small-btn note-del" data-item="${escapeHtml(n.item_id)}" aria-label="오답노트에서 삭제">삭제</button>
+      </div>
     </li>`;
   }).join('');
+  renderHiddenList();
+}
+
+const markDiff = (from, to) => highlightOriginal(from, to)
+  .map((s) => (s.changed ? `<mark>${escapeHtml(s.text)}</mark>` : escapeHtml(s.text))).join('');
+
+function renderHiddenList() {
+  const list = state.server.hiddenList;
+  $('hidden-count').textContent = `(${list.length})`;
+  $('hidden-empty').hidden = list.length > 0;
+  $('hidden-list').innerHTML = list.map((h) => {
+    const item = state.itemsById.get(h.item_id);
+    const v = item && findVariant(item, h.variant_id);
+    const body = v
+      ? `<p class="section-path">${escapeHtml(item.section.join(' › '))}</p><p>${markDiff(item.answer, v.text)}</p>`
+      : `<p class="small muted">${escapeHtml(h.variant_id)} (현재 데이터에 없는 오지문)</p>`;
+    return `<li>${body}<button type="button" class="btn ghost small-btn unhide" data-variant="${escapeHtml(h.variant_id)}">되돌리기</button></li>`;
+  }).join('');
+}
+
+// ------------------------------------------------------------------ 오답노트 삭제 (+ 오지문 숨김)
+let dismissCtx = null;
+
+function openDismiss(itemId) {
+  const item = state.itemsById.get(itemId);
+  const note = state.server.notes[itemId];
+  if (!item || !note) return;
+  const hidden = state.server.hidden;
+  dismissCtx = {
+    itemId,
+    // 틀렸던 오지문 목록은 서버 응답 기록에서 미리 불러 둠 (오프라인이면 마지막으로 틀린 오지문만)
+    variants: state.server.missedAttempts(itemId).then((atts) => missedVariantsForNote(item, note, atts, hidden)),
+  };
+  $('dismiss-item-text').textContent = item.answer;
+  $('dismiss-step1').hidden = false;
+  $('dismiss-step2').hidden = true;
+  $('dismiss-yes').disabled = false;
+  const dlg = $('dismiss-dialog');
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+}
+
+async function confirmDismiss() {
+  if (!dismissCtx) return;
+  $('dismiss-yes').disabled = true;
+  const item = state.itemsById.get(dismissCtx.itemId);
+  const variants = await dismissCtx.variants;
+  if (!variants.length) { finishDismiss([]); return; } // 정지문만 틀린 경우: 삭제만
+  $('dismiss-variants').innerHTML = variants.map((v, i) => `
+    <li><label class="pick">
+      <input type="checkbox" value="${escapeHtml(v.id)}"${i === 0 ? ' checked' : ''} />
+      <span>${markDiff(item.answer, v.text)}</span>
+    </label></li>`).join('');
+  $('dismiss-step1').hidden = true;
+  $('dismiss-step2').hidden = false;
+}
+
+function finishDismiss(hideIds) {
+  const ctx = dismissCtx;
+  dismissCtx = null;
+  $('dismiss-dialog').close();
+  if (!ctx) return;
+  state.server.dismissNote(ctx.itemId, hideIds);
+  renderNotes();
+  renderNotesCount();
 }
 
 function openNotes() {
@@ -264,6 +332,7 @@ function startRound(mode = state.mode) {
   stopTimer();
   state.mode = mode;
   state.roundPool = pool; // 라운드 도중 오답노트에서 빠진 항목도 이번 라운드에서는 계속 출제 대상
+  state.roundHidden = state.server.hidden; // 사용자가 숨긴 오지문 (X 쪽 후보에서 제외)
   const timer = getTimerOption(state.settings.timerId);
   state.round = newRound(size, {
     id: state.server.newRoundId(), mode,
@@ -278,7 +347,7 @@ function startRound(mode = state.mode) {
 
 function nextQuestion() {
   if (isRoundOver(state.round)) { finishRound(); return; }
-  state.question = pickQuestion(state.roundPool);
+  state.question = pickQuestion(state.roundPool, Math.random, state.roundHidden);
   state.answered = false;
   const q = state.question;
   const n = state.round.answered.length + 1;
@@ -402,6 +471,22 @@ function bind() {
   $('notes-card').addEventListener('click', openNotes);
   $('notes-back').addEventListener('click', goHome);
   $('notes-start').addEventListener('click', () => startRound('wrongnote'));
+  $('notes-list').addEventListener('click', (e) => {
+    const b = e.target.closest('.note-del');
+    if (b) openDismiss(b.dataset.item);
+  });
+  $('hidden-list').addEventListener('click', (e) => {
+    const b = e.target.closest('.unhide');
+    if (!b) return;
+    state.server.unhideVariant(b.dataset.variant);
+    renderHiddenList();
+  });
+  $('dismiss-yes').addEventListener('click', confirmDismiss);
+  $('dismiss-cancel').addEventListener('click', () => { dismissCtx = null; $('dismiss-dialog').close(); });
+  $('hide-yes').addEventListener('click', () => finishDismiss(
+    [...document.querySelectorAll('#dismiss-variants input:checked')].map((i) => i.value)));
+  $('hide-no').addEventListener('click', () => finishDismiss([]));
+  $('dismiss-dialog').addEventListener('cancel', () => { dismissCtx = null; });
   window.addEventListener('popstate', () => { /* 화면 상태는 앱이 관리 (뒤로가기로 로그아웃되지 않게) */ });
   // 키보드(데스크톱): O/X 또는 ←/→, Enter/Space = 다음
   document.addEventListener('keydown', (e) => {

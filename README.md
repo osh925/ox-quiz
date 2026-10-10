@@ -61,6 +61,10 @@ python3 -m http.server 8080         # http://localhost:8080 접속
   - 어느 모드에서든 다시 틀리면 연속 정답 수가 0이 되고, 빠졌던 문항도 다시 들어옵니다.
 - **오답노트 화면**: 섹션 경로, 정지문, 틀린 횟수, 마지막으로 틀린 날짜, 연속 정답 수를 보여 줍니다. '틀렸던 지문 보기'를 펼치면 틀렸던 오지문이 바뀐 부분 강조와 함께 나옵니다.
 - **오답노트로 풀기**: 출제 규칙(50/50, 오지문 균등)과 제한 시간 옵션은 일반 모드와 같고, 활성 오답노트 항목에서만 출제합니다. 라운드 길이는 `min(설정한 문항 수, 오답노트 항목 수)`이고(복원 추출), 항목이 0개면 버튼이 비활성화됩니다. 라운드 도중에 빠진 항목도 그 라운드가 끝날 때까지는 계속 나올 수 있습니다.
+- **오답노트에서 삭제**: 항목마다 있는 **삭제** 버튼으로 오답노트에서 뺄 수 있습니다(`dismissed`). 풀이 기록(`attempts`)은 그대로 남고, 나중에 다시 틀리면 다시 들어옵니다.
+  - 정지문만 틀렸던 항목은 '삭제할까요?' 확인 한 번으로 끝납니다.
+  - 그 정지문의 **오지문을 틀린 적이 있으면** 이어서 **'이 오지문이 앞으로 등장하지 않게 할까요?'**(예/아니요)를 묻습니다. 틀렸던 오지문이 여러 개면 체크박스로 고를 수 있고, 마지막에 틀린 것이 기본으로 체크돼 있습니다. '예'를 고른 오지문은 그 사용자에게 **일반·오답노트 모드 모두에서 출제되지 않습니다**(`pickQuestion(pool, rng, hidden)`): 남은 오지문 중에서 균등하게 고르고, 전부 숨겼으면 오지문이 없는 문항처럼 정지문(O)이 나옵니다. 정지문을 고를 확률과 50/50 규칙은 그대로입니다. 오답노트를 만들 때 쓰는 문제 데이터는 바뀌지 않으며, 숨김은 사용자별입니다.
+  - 오답노트 화면 맨 아래 **'숨긴 오지문'**을 펼치면 숨긴 오지문 목록과 **되돌리기** 버튼이 있습니다.
 - **저장 실패**: 모든 저장은 큐(`js/sync-queue.js`, localStorage)를 거칩니다. 네트워크가 끊기면 쌓아 두고, 다시 연결되거나(online 이벤트) 30초마다 순서대로 다시 보냅니다. 3초 넘게 남아 있으면 화면 아래에 작은 '저장 대기 n건' 알림이 뜹니다. 같은 응답이 두 번 저장되지 않도록 응답마다 `client_id`를 붙입니다. 오프라인에서도 오답노트와 기록은 로컬 캐시로 바로 갱신됩니다.
 ### 앱 설치(홈 화면에 추가)
 
@@ -186,9 +190,10 @@ ox-quiz/
 │  ├─ build_dataset.py     docx → JSON 파서·검증
 │  ├─ make_icons.py        아이콘 생성(Pillow)
 │  ├─ screenshots.cjs      헤드리스 크롬 퀴즈/타이머 E2E + 스크린샷 (OX_NICK/OX_PIN 필요)
-│  └─ e2e-supabase.cjs     실제 Supabase 대상 E2E: 가입·로그인·RLS·오답노트·오프라인 큐·지속성
+│  ├─ e2e-supabase.cjs     실제 Supabase 대상 E2E: 가입·로그인·RLS·오답노트·오프라인 큐·지속성
+│  └─ e2e-hide.cjs         오답노트 삭제·오지문 숨김·되돌리기 E2E (임시 계정 생성 → 끝나면 SQL로 삭제)
 ├─ supabase/
-│  ├─ migrations/*.sql     DB 스키마·RLS·record_attempt 함수 (적용된 마이그레이션 원본)
+│  ├─ migrations/*.sql     DB 스키마·RLS·record_attempt/dismiss_wrong_note 함수 (적용된 마이그레이션 원본)
 │  └─ functions/signup/    가입 Edge Function (닉네임+PIN → Auth 사용자 생성)
 ├─ tests/quiz-core.test.js node --test: 확률 분포 시뮬레이션, 채점 분기, 시간 초과 채점, 타이머(가짜 시계), 라운드, 저장소, 전체 데이터 diff
 └─ screenshots/            모바일 화면 캡처
@@ -213,9 +218,14 @@ ox-quiz/
 | `profiles` | user_id(PK), nickname(표시용), nickname_norm(unique) | auth.users에 사용자가 생기면 트리거(`private.handle_new_user`)가 자동 생성 |
 | `rounds` | id(클라이언트 UUID), mode(normal/wrongnote), timer_sec, total, attempted, correct, timeouts, started_at, finished_at | 시작할 때 행을 만들고 끝날 때 갱신. 중간에 그만둔 라운드는 finished_at이 null |
 | `attempts` | client_id(중복 방지), item_id(정지문 ID), variant_id(오지문 ID 또는 null), shown_type(O/X), user_answer(O/X, 시간 초과면 null), correct, timed_out, mode, round_id, created_at | `unique(user_id, client_id)` |
-| `wrong_notes` | (user_id, item_id) PK, wrong_count, last_wrong_at, correct_streak, cleared, cleared_at, last_variant_id | 오답노트 |
+| `wrong_notes` | (user_id, item_id) PK, wrong_count, last_wrong_at, correct_streak, cleared, cleared_at, last_variant_id, dismissed, dismissed_at | 오답노트. `dismissed`는 사용자가 직접 삭제한 표시(다시 틀리면 false) |
+| `hidden_variants` | (user_id, variant_id) PK, item_id, created_at | 사용자가 숨긴 오지문 (`20261010100000_wrong_note_dismiss_hidden_variants.sql`) |
 
 **RPC** `record_attempt(...)`: `SECURITY INVOKER` 함수라 RLS가 그대로 적용됩니다. 응답 저장과 오답노트 갱신을 **한 트랜잭션에서 원자적으로** 처리하고, 같은 `client_id`로 다시 호출되면 아무것도 바꾸지 않습니다.
+
+**RPC** `dismiss_wrong_note(p_item_id, p_hide_variants text[])`: 역시 `SECURITY INVOKER`. 오답노트 항목을 삭제 표시하고, 그 정지문에 속한 오지문 ID(`<item_id>-…`)만 `hidden_variants`에 추가합니다(다른 문항 ID는 무시, 중복은 무시). 되돌리기는 본인 행 `delete`(RLS)로 처리합니다. 둘 다 오프라인 큐(`dismiss`/`unhide`)를 거칩니다.
+
+**마이그레이션**: `20261010090000_init_schema.sql`(초기 스키마) → `20261010100000_wrong_note_dismiss_hidden_variants.sql`(컬럼·테이블·함수 추가만 하는 비파괴 변경).
 
 **스키마를 바꿀 때**: `supabase/migrations/`에 새 SQL 파일을 추가하고, Supabase SQL Editor(또는 CLI `supabase db push`)로 적용합니다.
 
@@ -236,6 +246,11 @@ ox-quiz/
      where id = (select user_id from public.profiles where nickname_norm = '정규화된닉네임');
      ```
      (정규화된 닉네임 = 소문자·공백 제거. 예: `Test 용A` → `test용a`)
+- **오지문별 숨김 집계**(데이터 품질 점검용 — 많이 숨겨진 오지문은 애매하거나 잘못 만들어졌을 가능성이 큼): 대시보드 → **SQL Editor**에서 실행하세요.
+  ```sql
+  select * from private.hidden_variant_counts order by hide_count desc;
+  ```
+  컬럼: `variant_id`, `item_id`, `hide_count`(숨긴 사용자 수), `first_hidden_at`, `last_hidden_at`. 사용자 정보는 담지 않는 집계이고, `private` 스키마는 API에 노출되지 않으며 `anon`/`authenticated`에는 권한이 없어 앱에서는 볼 수 없습니다(SQL Editor·service role 전용). 오지문 ID로 원문을 찾으려면 `data/questions.json`에서 해당 `id`를 검색하면 됩니다.
 - **사용자 삭제**: Authentication → Users에서 삭제하면 프로필·기록·오답노트가 함께 지워집니다(`on delete cascade`).
 - **닉네임 변경**: 내부 이메일이 닉네임에서 만들어지므로 간단하지 않습니다. 현재는 지원하지 않습니다(필요하면 auth.users.email과 profiles를 함께 바꿔야 함).
 

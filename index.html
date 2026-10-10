@@ -131,6 +131,12 @@
       <p class="small muted" id="notes-help"></p>
       <ul id="notes-list" class="notes-list"></ul>
       <p id="notes-empty" class="card small muted center-text" hidden>오답노트가 비어 있어요. 문제를 풀다 틀리면 여기에 모입니다.</p>
+      <details id="hidden-section" class="card hidden-section">
+        <summary>숨긴 오지문 <span id="hidden-count" class="muted"></span></summary>
+        <p class="small muted">여기 있는 오지문은 문제로 나오지 않아요. 되돌리면 다시 나와요.</p>
+        <ul id="hidden-list" class="hidden-list"></ul>
+        <p id="hidden-empty" class="small muted">숨긴 오지문이 없어요.</p>
+      </details>
       <footer class="quiz-actions">
         <button type="button" id="notes-start" class="btn primary big">오답노트로 풀기</button>
       </footer>
@@ -188,6 +194,28 @@
     <div class="dialog-actions">
       <button type="button" id="again-btn" class="btn primary big">다시 하기</button>
       <button type="button" id="home-btn" class="btn ghost">처음으로</button>
+    </div>
+  </dialog>
+
+  <!-- 오답노트 삭제 확인 -->
+  <dialog id="dismiss-dialog" class="dialog dialog-left" aria-labelledby="dismiss-title">
+    <div id="dismiss-step1">
+      <h2 id="dismiss-title">오답노트에서 삭제할까요?</h2>
+      <p id="dismiss-item-text" class="dismiss-item"></p>
+      <p class="small muted">다시 틀리면 오답노트에 다시 들어와요. 풀이 기록은 지워지지 않아요.</p>
+      <div class="dialog-actions">
+        <button type="button" id="dismiss-yes" class="btn primary big">삭제</button>
+        <button type="button" id="dismiss-cancel" class="btn ghost">취소</button>
+      </div>
+    </div>
+    <div id="dismiss-step2" hidden>
+      <h2>이 오지문이 앞으로 등장하지 않게 할까요?</h2>
+      <p class="small muted">체크한 오지문은 일반·오답노트 모드 모두에서 나오지 않아요. 정지문과 다른 오지문은 계속 나와요. '숨긴 오지문'에서 되돌릴 수 있어요.</p>
+      <ul id="dismiss-variants" class="variant-pick"></ul>
+      <div class="dialog-actions">
+        <button type="button" id="hide-yes" class="btn primary big">예</button>
+        <button type="button" id="hide-no" class="btn ghost">아니요 (오답노트에서만 삭제)</button>
+      </div>
     </div>
   </dialog>
 

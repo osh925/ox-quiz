@@ -5,7 +5,7 @@
 //  - 같은 출처 GET: 네트워크 우선 → 실패하면 캐시. 배포하면 다음 로드부터 바로 새 버전이 보이고, 오프라인이면 마지막 버전을 씀
 //  - supabase-js CDN(버전 고정 URL): 캐시 우선
 //  - Supabase API(인증/DB/함수) 및 GET 이 아닌 요청: 관여하지 않음 (오프라인 저장은 앱의 SyncQueue 가 담당)
-const VERSION = 'oxquiz-v1';
+const VERSION = 'oxquiz-v2';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/quiz-core.js', 'js/timer.js', 'js/storage.js', 'js/supabase-store.js',
