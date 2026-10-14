@@ -6,7 +6,7 @@
 //  - supabase-js CDN(버전 고정 URL): 캐시 우선
 //  - Supabase API(인증/DB/함수) 및 GET 이 아닌 요청: 관여하지 않음 (오프라인 저장은 앱의 SyncQueue 가 담당)
 const PREFIX = 'oxquiz-v'; // 이 앱의 캐시 이름 접두사 (다른 앱/미리보기 캐시는 건드리지 않음)
-const VERSION = `${PREFIX}2`;
+const VERSION = `${PREFIX}3`;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/quiz-core.js', 'js/timer.js', 'js/storage.js', 'js/supabase-store.js',
