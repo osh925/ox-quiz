@@ -84,6 +84,23 @@ python3 -m http.server 8080         # http://localhost:8080 접속
 
 ---
 
+## 2-1. 단답형(빈칸 채우기) — v2.0.0
+
+- 처음 화면 **문제 유형**: `OX만`(기본) / `단답형만` / `섞어서`. 일반·오답노트 모드 모두에 적용되고 기기에 저장됩니다.
+- **섞어서** 규칙: 정지문을 균등하게 하나 고른 뒤, 그 정지문에 (숨기지 않은) 단답형이 있으면 50% 확률로 단답형, 아니면 기존 OX 규칙(정지문/오지문 50:50, 기존과 같은 난수 순서) 그대로 출제합니다. 단답형이 없거나 숨긴 정지문은 항상 OX입니다. `OX만`은 v1과 완전히 같습니다.
+- **빈칸 표시**: `글자 수 표시` — 정답 한 글자(한글 한 음절, 영문·숫자 한 글자)당 `O` 하나, 정답 안의 띄어쓰기는 한 칸 띄움(`변론 집중` → `OO OO`). `글자 수 숨기기` — 길이와 관계없이 `＿＿＿＿＿` 고정.
+- **채점**: 입력과 정답을 모두 NFC 정규화 → **모든 공백 제거** → 가운뎃점 류(`·ㆍ‧・∙` 및 `,，/.`)를 `·`로 통일 → 완전 일치. 띄어쓰기만 다른 답은 항상 정답이고(데이터에 공백 변형을 적을 필요 없음), 조사·어미·오탈자는 정답 처리하지 않습니다. 대신 **정답으로 인정** 버튼으로 본인이 정답 처리할 수 있고(기록에 `overridden=true`), 시간 초과·**모르겠어요**는 인정할 수 없습니다.
+- 타이머: 무제한/10초/30초 + 단답형이 포함될 때만 **60초**. 제출하면 멈추고, 피드백 중엔 흐르지 않으며, 시간 초과는 오답.
+- 틀린 단답형은 같은 오답노트(정지문 단위)에 들어가고 `last_variant_id` 에 단답형 ID(`<정지문ID>-c1`)가 남습니다. 삭제할 때 *"이 단답형 문제가 앞으로 등장하지 않게 할까요?"* 에서 예를 고르면 `hidden_variants` 에 그 ID가 저장되어 다시 나오지 않습니다('숨긴 문제'에서 되돌리기).
+- 단답형 응답은 '정답으로 인정'을 반영할 수 있도록 **피드백을 떠날 때**(다음/그만하기/결과/페이지 닫힘) 저장됩니다.
+
+### 단답형 데이터 (`data/cloze_source.jsonl` → `data/cloze.json`)
+
+- 원본: `data/cloze_source.jsonl` — 정지문당 한 줄. `{"item_id","hash","blanks":[{"answer","accept":[...]}],"note"?}` 또는 `{"item_id","hash","skip":"이유"}`. 사람이 판단해서 쓴 것(정규식 자동 생성 아님): 공부한 사람이 하나로 떠올릴 수 있는 핵심 개념어, 숫자(조문·금액·분수) 정답 금지(기간 `2주`·`14일` 등은 허용), 빈칸 1개(최대 2개), 조사는 문장에 남김, 같은 말이 또 나오면 모두 빈칸.
+- 빌드·검증: `python3 tools/build_cloze.py` — 정답이 원문에 정확히 있는지, 빈칸 겹침, 숫자 규칙, 힌트 노출(정답이 빈칸 밖에 남음), 그리고 **정지문 해시가 바뀐 항목(stale)** 을 검사하고 `data/cloze.json`·`data/cloze_report.txt` 를 씁니다. 오류/stale 이 있으면 종료 코드 1. `questions.json` 을 다시 만든 뒤에는 꼭 실행하고, stale 로 나온 줄은 문장을 확인해 고친 다음 `hash` 를 갱신하세요.
+- `cloze.json` 의 `accept` 는 빌드 때 공백을 모두 지운 정규화 형태로 저장되고, 화면 표시는 `canonical` 을 씁니다.
+- 현재: 682개 중 665개 출제, 17개 건너뜀(목록형·메타 문장 등, 이유는 report 참고).
+
 ## 3. 데이터 업데이트 방법
 
 1. 원본 docx를 고칩니다(아래 4번 서식 규칙을 지켜 주세요).
@@ -251,6 +268,8 @@ ox-quiz/
   select * from private.hidden_variant_counts order by hide_count desc;
   ```
   컬럼: `variant_id`, `item_id`, `hide_count`(숨긴 사용자 수), `first_hidden_at`, `last_hidden_at`. 사용자 정보는 담지 않는 집계이고, `private` 스키마는 API에 노출되지 않으며 `anon`/`authenticated`에는 권한이 없어 앱에서는 볼 수 없습니다(SQL Editor·service role 전용). 오지문 ID로 원문을 찾으려면 `data/questions.json`에서 해당 `id`를 검색하면 됩니다.
+  v2부터 `question_type` 컬럼(`ox`/`cloze`)이 추가되어 단답형 숨김도 함께 집계됩니다: `select * from private.hidden_variant_counts where question_type = 'cloze' order by hide_count desc;` (단답형 ID는 `data/cloze.json` 에서 검색)
+- **v2 DB 변경(추가만)**: `attempts` 에 `question_type`·`cloze_id`·`user_text`·`overridden`, `rounds` 에 `question_types`·`blank_display`·`cloze_attempted`·`cloze_correct`. 새 클라이언트는 `record_attempt_v2` 를 쓰고, 예전 `record_attempt` 는 그대로 남아 있어 캐시된 v1 앱도 계속 기록됩니다(기본값 `ox`). 마이그레이션: `supabase/migrations/20261014090000_cloze_question_types.sql`.
 - **사용자 삭제**: Authentication → Users에서 삭제하면 프로필·기록·오답노트가 함께 지워집니다(`on delete cascade`).
 - **닉네임 변경**: 내부 이메일이 닉네임에서 만들어지므로 간단하지 않습니다. 현재는 지원하지 않습니다(필요하면 auth.users.email과 profiles를 함께 바꿔야 함).
 

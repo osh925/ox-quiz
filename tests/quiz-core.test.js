@@ -158,12 +158,13 @@ test('시간 초과 채점: 항상 오답, 오지문이면 정지문 표시 / �
   let r = newRound(10);
   r = recordAnswer(r, t, gradeTimeout(t));
   r = recordAnswer(r, f, grade(f, 'X'));
-  assert.deepEqual(roundSummary(r), { attempted: 2, correct: 1, wrong: 1, timeouts: 1, rate: 0.5 });
+  assert.deepEqual(roundSummary(r), { attempted: 2, correct: 1, wrong: 1, timeouts: 1, rate: 0.5,
+    ox: { attempted: 2, correct: 1 }, cloze: { attempted: 0, correct: 0 }, overrides: 0 });
 });
 
 test('제한 시간 옵션: 기본 무제한, 모르는 id 는 기본값으로', () => {
   assert.equal(DEFAULT_TIMER_ID, 'none');
-  assert.deepEqual(TIMER_OPTIONS.map((o) => o.seconds), [0, 10, 30]);
+  assert.deepEqual(TIMER_OPTIONS.map((o) => o.seconds), [0, 10, 30, 60], '60초는 단답형용 (timerOptionsFor 참고)');
   assert.equal(getTimerOption('10s').seconds, 10);
   assert.equal(getTimerOption('bogus').id, 'none');
   assert.equal(getTimerOption(undefined).id, 'none');

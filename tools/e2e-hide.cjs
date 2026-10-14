@@ -162,7 +162,7 @@ const server = (page) => ev(page, async () => {
     check('오프라인: 마지막으로 틀린 오지문으로 확인창 표시', offBoxes.length === 1 && offBoxes[0] === pick.Cw, offBoxes);
     await page.click('#hide-yes');
     await page.waitForFunction(() => !document.querySelector('#dismiss-dialog').open);
-    const offState = await ev(page, () => ({ pending: window.__oxquiz.state.server.pending, hidden: window.__oxquiz.state.server.hiddenList.length, q: localStorage.getItem('oxquiz.queue.' + window.__oxquiz.state.server.user.id) }));
+    const offState = await ev(page, () => ({ pending: window.__oxquiz.state.server.pending, hidden: window.__oxquiz.state.server.hiddenList.length, q: localStorage.getItem(((location.pathname.includes('/beta/') ? 'oxquizbeta' : 'oxquiz') + '.queue.') + window.__oxquiz.state.server.user.id) }));
     check('오프라인: 로컬 즉시 반영 + 큐 대기', offState.pending >= 1 && offState.hidden === 3 && /dismiss/.test(offState.q), { pending: offState.pending, hidden: offState.hidden });
     await page.setOfflineMode(false);
     await ev(page, () => window.__oxquiz.state.server.flush());
@@ -192,7 +192,7 @@ const server = (page) => ev(page, async () => {
     await page.reload({ waitUntil: 'networkidle0' });
     await page.waitForSelector('#screen-start.active', { timeout: 20000 });
     await ev(page, () => window.__oxquiz.state.server.refresh());
-    const after = await ev(page, () => ({ h: window.__oxquiz.state.server.hiddenList.length, cache: JSON.parse(localStorage.getItem('oxquiz.cache.' + window.__oxquiz.state.server.user.id)).hidden.length }));
+    const after = await ev(page, () => ({ h: window.__oxquiz.state.server.hiddenList.length, cache: JSON.parse(localStorage.getItem(((location.pathname.includes('/beta/') ? 'oxquizbeta' : 'oxquiz') + '.cache.') + window.__oxquiz.state.server.user.id)).hidden.length }));
     check('새로고침 후 숨김 목록 유지', after.h === 2 && after.cache === 2, after);
 
     // (10) 보안: RLS / 권한

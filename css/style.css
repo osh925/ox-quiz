@@ -192,3 +192,40 @@ details summary { cursor: pointer; margin-top: 8px; color: var(--muted); }
 .variant-pick { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
 .pick { display: flex; gap: 10px; align-items: flex-start; background: var(--bg); border-radius: 10px; padding: 10px; cursor: pointer; line-height: 1.65; }
 .pick input { width: 22px; height: 22px; flex: none; margin-top: 3px; accent-color: var(--ng); }
+
+/* ---- v2: 단답형 ---- */
+.q-type { margin: 0 0 6px; font-size: .8rem; font-weight: 700; color: var(--muted, #667); letter-spacing: .02em; }
+.q-type.cloze { color: #6a3fc7; }
+.tag-cloze { background: #efe7ff; color: #5a2fb7; }
+.statement .blank {
+  display: inline-block; padding: 0 4px; margin: 0 1px; border-bottom: 2px solid #6a3fc7;
+  color: #6a3fc7; font-weight: 700; letter-spacing: .12em; white-space: pre; line-height: 1.3;
+}
+.statement .blank.hidden-len { letter-spacing: 0; }
+.statement .blank sup { font-size: .65em; margin-right: 2px; letter-spacing: 0; }
+.cloze-form { display: grid; gap: 10px; width: 100%; }
+.cloze-inputs { display: grid; gap: 8px; }
+.cloze-field { display: grid; gap: 4px; }
+.cloze-input {
+  width: 100%; box-sizing: border-box; font-size: 1.1rem; padding: 12px 14px;
+  border: 2px solid #ccd; border-radius: 12px; background: #fff; color: inherit;
+}
+.cloze-input:focus { outline: none; border-color: #6a3fc7; }
+.cloze-actions { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
+.fb-cloze p { margin: 4px 0; }
+.fb-cloze .small { display: inline-block; min-width: 3em; }
+#override-btn { width: 100%; margin-bottom: 8px; }
+.history .mix { display: block; }
+#result-mix { margin-top: -4px; }
+@media (prefers-color-scheme: dark) {
+  .cloze-input { background: #1d1f26; border-color: #3a3d48; }
+  .tag-cloze { background: #3a2a63; color: #d9c8ff; }
+  .statement .blank, .q-type.cloze { color: #b79bff; border-color: #b79bff; }
+}
+.update-toast {
+  position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-radius: 14px;
+  background: #222; color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.25); z-index: 50; max-width: 92vw;
+}
+.update-toast .icon-btn { color: #fff; }
+.update-toast[hidden] { display: none; }

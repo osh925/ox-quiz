@@ -7,22 +7,31 @@ import {
   isRoundOver, roundSummary, clampRoundSize, highlightOriginal,
   gradeTimeout, feedbackText, TIMER_OPTIONS, DEFAULT_TIMER_ID, getTimerOption,
   activeWrongNotes, buildWrongNotePool, wrongNoteRoundSize, findVariant, WRONG_NOTE_CLEAR_STREAK,
-  missedVariantsForNote,
+  missedVariantsForNote, attachCloze, hasVisibleCloze, poolCountForTypes, timerOptionsFor,
+  QUESTION_TYPE_OPTIONS, DEFAULT_QUESTION_TYPES, BLANK_DISPLAY_OPTIONS, DEFAULT_BLANK_DISPLAY,
+  clozeSegments, blankMask, clozeAnswerSegments, gradeCloze, gradeClozeGiveUp, overrideResult,
 } from './quiz-core.js';
+import { APP_VERSION, STORAGE_NS } from './config.js';
 import { createCountdown } from './timer.js';
 import { LocalProgressStore } from './storage.js';
 import { SupabaseStore } from './supabase-store.js';
 
 const DATA_URL = 'data/questions.json';
+const CLOZE_URL = 'data/cloze.json';
 const $ = (id) => document.getElementById(id);
 
 const state = {
   data: null,
   itemsById: new Map(),
-  store: new LocalProgressStore(),           // 기기별 설정(prefs)만
+  store: new LocalProgressStore(undefined, STORAGE_NS), // 기기별 설정(prefs)만
   server: new SupabaseStore({ onSyncChange: (n) => renderSyncBanner(n) }),
   mode: 'normal',                            // 'normal' | 'wrongnote'
-  settings: { subjectId: null, sectionKey: '', roundSize: 15, timerId: DEFAULT_TIMER_ID },
+  settings: {
+    subjectId: null, sectionKey: '', roundSize: 15, timerId: DEFAULT_TIMER_ID,
+    questionTypes: DEFAULT_QUESTION_TYPES, blankDisplay: DEFAULT_BLANK_DISPLAY,
+  },
+  clozeCount: 0,
+  pending: null, // 단답형 응답은 피드백을 떠날 때 저장 ('정답으로 인정'을 반영하기 위해)
   pool: [],
   round: null,
   question: null,
@@ -60,17 +69,38 @@ function fillSections() {
   sel.value = state.settings.sectionKey;
 }
 
+function segHtml(name, options, current) {
+  return options.map((o) => `
+    <label class="seg"><input type="radio" name="${name}" value="${o.id}"${o.id === current ? ' checked' : ''} />
+    <span>${escapeHtml(o.label)}</span></label>`).join('');
+}
+
+function fillTypeOptions() {
+  $('qtype-options').innerHTML = segHtml('qtype', QUESTION_TYPE_OPTIONS, state.settings.questionTypes);
+  $('blank-options').innerHTML = segHtml('blank', BLANK_DISPLAY_OPTIONS, state.settings.blankDisplay);
+  $('blank-field').hidden = state.settings.questionTypes === 'ox' || !state.clozeCount;
+  $('qtype-field').hidden = !state.clozeCount; // 단답형 데이터를 못 읽었으면 OX만
+}
+
 function fillTimerOptions() {
   const box = $('timer-options');
-  box.innerHTML = TIMER_OPTIONS.map((o) => `
-    <label class="seg"><input type="radio" name="timer" value="${o.id}"${o.id === state.settings.timerId ? ' checked' : ''} />
+  const cur = getTimerOption(state.settings.timerId, state.settings.questionTypes).id;
+  box.innerHTML = timerOptionsFor(state.settings.questionTypes).map((o) => `
+    <label class="seg"><input type="radio" name="timer" value="${o.id}"${o.id === cur ? ' checked' : ''} />
     <span>${escapeHtml(o.label)}</span></label>`).join('');
 }
 
 function updatePoolInfo() {
   state.pool = buildPool(state.data, { subjectId: state.settings.subjectId, sectionPrefix: sectionPrefixOf(state.settings.sectionKey) });
   const wrongs = state.pool.reduce((n, it) => n + it.wrongs.length, 0);
-  $('pool-info').textContent = `출제 범위: 정지문 ${state.pool.length}개 · 오지문 ${wrongs}개`;
+  const hidden = state.server.hidden;
+  const clozes = state.pool.filter((it) => hasVisibleCloze(it, hidden)).length;
+  const t = state.settings.questionTypes;
+  $('pool-info').textContent = t === 'ox' ? `출제 범위: 정지문 ${state.pool.length}개 · 오지문 ${wrongs}개`
+    : t === 'cloze' ? `출제 범위: 단답형 ${clozes}개`
+      : `출제 범위: 정지문 ${state.pool.length}개 · 오지문 ${wrongs}개 · 단답형 ${clozes}개`;
+  const startBtn = $('start-form').querySelector('button[type=submit]');
+  startBtn.disabled = poolCountForTypes(state.pool, t, hidden) === 0;
   const subj = state.data.subjects.find((s) => s.id === state.settings.subjectId);
   $('subject-title').textContent = subj ? subj.title || subj.name : '';
 }
@@ -83,9 +113,13 @@ function fmtDate(iso) {
 function renderHistory() {
   const rounds = state.server.rounds;
   $('history-list').innerHTML = rounds.map((r) => {
+    const qt = r.question_types || 'ox';
     const tags = [r.mode === 'wrongnote' ? '<span class="tag">오답노트</span>' : '',
+      qt === 'cloze' ? '<span class="tag tag-cloze">단답형</span>' : qt === 'mixed' ? '<span class="tag tag-cloze">섞어서</span>' : '',
       r.timer_sec ? `<span class="tag">${r.timer_sec}초</span>` : ''].join('');
-    return `<li><span>${fmtDate(r.finished_at || r.started_at)} ${tags}</span><b>${r.correct} / ${r.attempted}</b></li>`;
+    const mix = qt === 'mixed' && r.attempted
+      ? `<span class="small muted mix">OX ${r.correct - (r.cloze_correct || 0)}/${r.attempted - (r.cloze_attempted || 0)} · 단답형 ${r.cloze_correct || 0}/${r.cloze_attempted || 0}</span>` : '';
+    return `<li><span>${fmtDate(r.finished_at || r.started_at)} ${tags}${mix}</span><b>${r.correct} / ${r.attempted}</b></li>`;
   }).join('');
   $('history-empty').hidden = rounds.length > 0;
 }
@@ -186,23 +220,30 @@ function renderNotes() {
   const rows = notes.map((n) => ({ n, item: state.itemsById.get(n.item_id) })).filter((r) => r.item);
   $('notes-title-count').textContent = `(${rows.length})`;
   $('notes-empty').hidden = rows.length > 0;
-  const size = wrongNoteRoundSize(state.settings.roundSize, rows.length);
-  const timer = getTimerOption(state.settings.timerId);
+  const types = state.settings.questionTypes;
+  const playable = poolCountForTypes(rows.map((r) => r.item), types, state.server.hidden);
+  const size = wrongNoteRoundSize(state.settings.roundSize, playable);
+  const timer = getTimerOption(state.settings.timerId, types);
+  const typeLabel = QUESTION_TYPE_OPTIONS.find((o) => o.id === types).label;
   $('notes-help').textContent = rows.length
-    ? `오답노트 모드에서 ${WRONG_NOTE_CLEAR_STREAK}번 연속 맞히면 빠집니다. 한 라운드 ${size}문항 · 제한 시간 ${timer.label} (처음 화면에서 변경)`
+    ? `오답노트 모드에서 ${WRONG_NOTE_CLEAR_STREAK}번 연속 맞히면 빠집니다. 한 라운드 ${size}문항 · ${typeLabel} · 제한 시간 ${timer.label} (처음 화면에서 변경)`
     : '';
   const start = $('notes-start');
-  start.disabled = rows.length === 0;
-  start.textContent = rows.length ? `오답노트로 풀기 (${size}문항)` : '오답노트가 비어 있어요';
+  start.disabled = size === 0;
+  start.textContent = !rows.length ? '오답노트가 비어 있어요'
+    : size ? `오답노트로 풀기 (${size}문항)` : '이 유형으로 낼 문항이 없어요';
   $('notes-list').innerHTML = rows.map(({ n, item }) => {
     const v = findVariant(item, n.last_variant_id);
-    const missed = v
-      ? `<p class="small muted">틀렸던 오지문 (바뀐 부분 강조)</p><p>${highlightOriginal(item.answer, v.text)
-        .map((s) => (s.changed ? `<mark>${escapeHtml(s.text)}</mark>` : escapeHtml(s.text))).join('')}</p>`
-        + (v.point ? `<p class="small muted">〔${escapeHtml(v.point.type)}〕 ${escapeHtml(v.point.change)}</p>` : '')
-      : '<p class="small muted">정지문(옳은 지문)을 X로 답했거나 시간 초과로 틀렸어요.</p>';
+    const missed = v && v.kind === 'cloze'
+      ? `<p class="small muted">틀렸던 단답형 (정답 강조)</p><p>${clozeAnswerHtml(v.cloze)}</p>`
+      : v
+        ? `<p class="small muted">틀렸던 오지문 (바뀐 부분 강조)</p><p>${highlightOriginal(item.answer, v.text)
+          .map((s) => (s.changed ? `<mark>${escapeHtml(s.text)}</mark>` : escapeHtml(s.text))).join('')}</p>`
+          + (v.point ? `<p class="small muted">〔${escapeHtml(v.point.type)}〕 ${escapeHtml(v.point.change)}</p>` : '')
+        : '<p class="small muted">정지문(옳은 지문)을 X로 답했거나 시간 초과로 틀렸어요.</p>';
+    const typeTag = v && v.kind === 'cloze' ? '<span class="tag tag-cloze">단답형</span> ' : '';
     return `<li class="card note">
-      <p class="section-path">${escapeHtml(item.section.join(' › '))}</p>
+      <p class="section-path">${typeTag}${escapeHtml(item.section.join(' › '))}</p>
       <p class="note-text">${escapeHtml(item.answer)}</p>
       <p class="note-meta small muted">틀린 횟수 <b>${n.wrong_count}</b> · 마지막 ${fmtDate(n.last_wrong_at)} · 연속 정답 ${n.correct_streak}/${WRONG_NOTE_CLEAR_STREAK}</p>
       <div class="note-actions">
@@ -216,6 +257,13 @@ function renderNotes() {
 
 const markDiff = (from, to) => highlightOriginal(from, to)
   .map((s) => (s.changed ? `<mark>${escapeHtml(s.text)}</mark>` : escapeHtml(s.text))).join('');
+/** 단답형: 정답을 채운 원문 (정답 부분 강조) */
+const clozeAnswerHtml = (c) => clozeAnswerSegments(c)
+  .map((s) => (s.changed ? `<mark>${escapeHtml(s.text)}</mark>` : escapeHtml(s.text))).join('');
+/** 오지문 또는 단답형 변형 1개를 표시용 HTML 로 */
+const variantHtml = (item, v) => (v.kind === 'cloze'
+  ? `<span class="tag tag-cloze">단답형</span> ${clozeAnswerHtml(v.cloze)}`
+  : `<span class="tag">오지문</span> ${markDiff(item.answer, v.text)}`);
 
 function renderHiddenList() {
   const list = state.server.hiddenList;
@@ -225,8 +273,8 @@ function renderHiddenList() {
     const item = state.itemsById.get(h.item_id);
     const v = item && findVariant(item, h.variant_id);
     const body = v
-      ? `<p class="section-path">${escapeHtml(item.section.join(' › '))}</p><p>${markDiff(item.answer, v.text)}</p>`
-      : `<p class="small muted">${escapeHtml(h.variant_id)} (현재 데이터에 없는 오지문)</p>`;
+      ? `<p class="section-path">${escapeHtml(item.section.join(' › '))}</p><p>${variantHtml(item, v)}</p>`
+      : `<p class="small muted">${escapeHtml(h.variant_id)} (현재 데이터에 없는 문제)</p>`;
     return `<li>${body}<button type="button" class="btn ghost small-btn unhide" data-variant="${escapeHtml(h.variant_id)}">되돌리기</button></li>`;
   }).join('');
 }
@@ -261,8 +309,11 @@ async function confirmDismiss() {
   $('dismiss-variants').innerHTML = variants.map((v, i) => `
     <li><label class="pick">
       <input type="checkbox" value="${escapeHtml(v.id)}"${i === 0 ? ' checked' : ''} />
-      <span>${markDiff(item.answer, v.text)}</span>
+      <span>${variantHtml(item, v)}</span>
     </label></li>`).join('');
+  const kinds = new Set(variants.map((v) => (v.kind === 'cloze' ? 'cloze' : 'ox')));
+  $('hide-title').textContent = kinds.size > 1 ? '이 문제들이 앞으로 등장하지 않게 할까요?'
+    : kinds.has('cloze') ? '이 단답형 문제가 앞으로 등장하지 않게 할까요?' : '이 오지문이 앞으로 등장하지 않게 할까요?';
   $('dismiss-step1').hidden = true;
   $('dismiss-step2').hidden = false;
 }
@@ -296,19 +347,31 @@ function renderTimer(remainingMs, totalMs) {
 
 function startQuestionTimer() {
   stopTimer();
-  const opt = getTimerOption(state.round.timerId);
+  const opt = getTimerOption(state.round.timerId, state.round.questionTypes);
   $('timer').hidden = !opt.seconds;
   if (!opt.seconds) return;
   const q = state.question;
   state.timer = createCountdown({
     seconds: opt.seconds,
     onTick: renderTimer,
-    onExpire: () => { if (state.question === q && !state.answered) showResult({ ...gradeTimeout(q), ms: opt.seconds * 1000 }); },
+    onExpire: () => {
+      if (state.question !== q || state.answered) return;
+      const res = q.type === 'cloze' ? gradeClozeGiveUp(q, { timedOut: true }) : gradeTimeout(q);
+      showResult({ ...res, ms: opt.seconds * 1000 });
+    },
   });
   state.timer.start();
 }
 
+/** 피드백을 떠날 때 보류 중이던 단답형 응답을 저장 */
+function commitPending() {
+  const p = state.pending;
+  state.pending = null;
+  if (p) state.server.recordAttempt(p.q, p.res, p.ctx);
+}
+
 function goHome() {
+  commitPending();
   stopTimer();
   if ($('result-dialog').open) $('result-dialog').close();
   state.round = null;
@@ -320,46 +383,88 @@ function goHome() {
 // ------------------------------------------------------------------ 퀴즈 진행
 function startRound(mode = state.mode) {
   let pool, size;
+  const types = state.clozeCount ? state.settings.questionTypes : 'ox';
+  const hidden = state.server.hidden;
   if (mode === 'wrongnote') {
     pool = buildWrongNotePool(state.data, state.server.notes);
-    size = wrongNoteRoundSize(state.settings.roundSize, pool.length);
-    if (!size) { alert('오답노트가 비어 있어요.'); goHome(); return; }
+    size = wrongNoteRoundSize(state.settings.roundSize, poolCountForTypes(pool, types, hidden));
+    if (!size) { alert(pool.length ? '이 문제 유형으로 낼 오답노트 문항이 없어요.' : '오답노트가 비어 있어요.'); goHome(); return; }
   } else {
     pool = state.pool;
     size = state.settings.roundSize;
-    if (!pool.length) { alert('선택한 범위에 문항이 없습니다.'); return; }
+    if (!poolCountForTypes(pool, types, hidden)) { alert('선택한 범위에 문항이 없습니다.'); return; }
   }
   stopTimer();
   state.mode = mode;
   state.roundPool = pool; // 라운드 도중 오답노트에서 빠진 항목도 이번 라운드에서는 계속 출제 대상
-  state.roundHidden = state.server.hidden; // 사용자가 숨긴 오지문 (X 쪽 후보에서 제외)
-  const timer = getTimerOption(state.settings.timerId);
+  state.roundHidden = hidden; // 사용자가 숨긴 오지문·단답형 (출제 후보에서 제외)
+  const timer = getTimerOption(state.settings.timerId, types);
+  const blankDisplay = types === 'ox' ? null : state.settings.blankDisplay;
   state.round = newRound(size, {
     id: state.server.newRoundId(), mode,
     subjectId: state.settings.subjectId, sectionKey: state.settings.sectionKey, dataVersion: state.data.version,
-    timerId: timer.id,
+    timerId: timer.id, questionTypes: types, blankDisplay,
   });
-  state.server.startRound({ id: state.round.id, mode, timerSec: timer.seconds, total: size, startedAt: state.round.startedAt });
+  state.server.startRound({ id: state.round.id, mode, timerSec: timer.seconds, total: size, startedAt: state.round.startedAt,
+    questionTypes: types, blankDisplay });
   $('mode-badge').hidden = mode !== 'wrongnote';
   show('quiz');
   nextQuestion();
 }
 
 function nextQuestion() {
+  commitPending();
   if (isRoundOver(state.round)) { finishRound(); return; }
-  state.question = pickQuestion(state.roundPool, Math.random, state.roundHidden);
+  state.question = pickQuestion(state.roundPool, Math.random, state.roundHidden, state.round.questionTypes);
   state.answered = false;
   const q = state.question;
   const n = state.round.answered.length + 1;
   $('progress-text').textContent = `${n} / ${state.round.size}`;
   $('progress-bar').style.width = `${((n - 1) / state.round.size) * 100}%`;
   $('q-section').textContent = q.section.join(' › ');
-  $('q-text').textContent = q.text;
   $('feedback').hidden = true;
   $('next-btn').hidden = true;
-  for (const b of document.querySelectorAll('.btn.ox')) { b.disabled = false; b.classList.remove('chosen'); }
-  $('ox-buttons').hidden = false;
+  $('override-btn').hidden = true;
+  const cloze = q.type === 'cloze';
+  $('q-type').textContent = cloze ? '단답형 · 빈칸에 들어갈 말을 쓰세요' : 'OX';
+  $('q-type').className = `q-type${cloze ? ' cloze' : ''}`;
+  $('q-card').classList.toggle('cloze', cloze);
+  $('ox-buttons').hidden = cloze;
+  $('cloze-form').hidden = !cloze;
+  if (cloze) renderClozeQuestion(q);
+  else {
+    $('q-text').textContent = q.text;
+    for (const b of document.querySelectorAll('.btn.ox')) { b.disabled = false; b.classList.remove('chosen'); }
+  }
   startQuestionTimer(); // 문제가 화면에 표시된 뒤에 시작
+  if (cloze) $('cloze-inputs').querySelector('input').focus({ preventScroll: true });
+}
+
+/** 단답형 문제 문장(빈칸 표시)과 입력칸 그리기 */
+function renderClozeQuestion(q) {
+  const display = state.round.blankDisplay || DEFAULT_BLANK_DISPLAY;
+  const multi = q.answers.length > 1;
+  $('q-text').innerHTML = clozeSegments(q.text).map((s) => ('blank' in s
+    ? `<span class="blank${display === 'hidden' ? ' hidden-len' : ''}" aria-label="빈칸${multi ? ` ${s.blank + 1}` : ''}">${multi ? `<sup>${s.blank + 1}</sup>` : ''}${escapeHtml(blankMask(q.answers[s.blank], display))}</span>`
+    : escapeHtml(s.text))).join('');
+  $('cloze-inputs').innerHTML = q.answers.map((a, i) => `
+    <label class="cloze-field"><span class="small muted">${multi ? `빈칸 ${i + 1}` : '정답'}</span>
+      <input type="text" class="cloze-input" data-i="${i}" autocomplete="off" autocapitalize="off" autocorrect="off"
+             spellcheck="false" enterkeyhint="${i === q.answers.length - 1 ? 'done' : 'next'}" maxlength="60" /></label>`).join('');
+  for (const b of $('cloze-form').querySelectorAll('button')) b.disabled = false;
+}
+
+function submitCloze(giveUp = false) {
+  if (state.answered || !state.question || state.question.type !== 'cloze') return;
+  let ms = null;
+  if (state.timer) {
+    const inTime = state.timer.stop();
+    if (!inTime) return;
+    ms = state.timer.elapsedMs();
+  }
+  const q = state.question;
+  const inputs = [...$('cloze-inputs').querySelectorAll('input')].map((i) => i.value);
+  showResult({ ...(giveUp ? gradeClozeGiveUp(q) : gradeCloze(q, inputs)), ms });
 }
 
 function answer(choice) {
@@ -381,7 +486,10 @@ function showResult(res) {
   state.timer = null; // 피드백 화면에선 타이머 없음 (마지막 남은 시간 표시만 유지)
   const q = state.question;
   state.round = recordAnswer(state.round, q, res);
-  state.server.recordAttempt(q, res, { mode: state.round.mode, roundId: state.round.id });
+  const ctx = { mode: state.round.mode, roundId: state.round.id };
+  if (q.type === 'cloze') state.pending = { q, res, ctx }; // '정답으로 인정' 가능성 때문에 다음으로 넘어갈 때 저장
+  else state.server.recordAttempt(q, res, ctx);
+  if (q.type === 'cloze') { renderClozeFeedback(q, res); return; }
 
   for (const b of document.querySelectorAll('.btn.ox')) {
     b.disabled = true;
@@ -393,6 +501,9 @@ function showResult(res) {
   $('fb-title').textContent = txt.title;
   $('fb-label').textContent = txt.label;
   $('fb-label').hidden = !txt.label;
+  $('fb-cloze').hidden = true;
+  $('override-btn').hidden = true;
+  $('fb-original-label').textContent = '원래 정지문 (바뀐 부분 강조)';
   const orig = $('fb-original');
   orig.hidden = !res.showOriginal;
   if (res.showOriginal) {
@@ -415,18 +526,67 @@ function showResult(res) {
   fb.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
+/** 단답형 피드백: 정답/오답, 내 답, 정답, 원래 정지문(정답 강조), '정답으로 인정' 버튼 */
+function renderClozeFeedback(q, res) {
+  for (const i of $('cloze-inputs').querySelectorAll('input')) i.disabled = true;
+  for (const b of $('cloze-form').querySelectorAll('button')) b.disabled = true;
+  $('cloze-form').hidden = true;
+  const fb = $('feedback');
+  fb.className = `feedback ${res.correct ? 'ok' : 'ng'}`;
+  const txt = feedbackText(res);
+  $('fb-title').textContent = res.overridden ? '정답으로 인정했어요' : txt.title;
+  const label = res.timedOut ? '시간 초과' : res.gaveUp ? '모르겠어요' : '';
+  $('fb-label').textContent = label;
+  $('fb-label').hidden = !label;
+  const mine = res.userText ? escapeHtml(res.userText) : '<span class="muted">(입력 없음)</span>';
+  $('fb-cloze').hidden = false;
+  $('fb-cloze').innerHTML = `<p><span class="small muted">내 답</span> ${mine}</p>`
+    + `<p><span class="small muted">정답</span> <b>${q.answers.map((a) => escapeHtml(a.canonical)).join(' / ')}</b></p>`;
+  const orig = $('fb-original');
+  orig.hidden = false; // 단답형은 맞아도 원문을 보여 줌 (정답 부분 강조)
+  $('fb-original-label').textContent = '원래 정지문 (정답 강조)';
+  $('fb-original-text').innerHTML = clozeAnswerHtml(q);
+  $('fb-point').hidden = true;
+  $('override-btn').hidden = res.correct || !!res.timedOut || !!res.gaveUp || !res.userText;
+  fb.hidden = false;
+  $('progress-bar').style.width = `${(state.round.answered.length / state.round.size) * 100}%`;
+  const next = $('next-btn');
+  next.textContent = isRoundOver(state.round) ? '결과 보기' : '다음';
+  next.hidden = false;
+  next.focus({ preventScroll: true });
+  fb.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+/** '정답으로 인정': 방금 오답을 정답으로 바꿈 (아직 저장 전이므로 저장될 값 자체를 바꿈) */
+function overrideLast() {
+  const p = state.pending;
+  if (!p || p.res.correct) return;
+  p.res = overrideResult(p.res);
+  state.round = { ...state.round, answered: state.round.answered.slice(0, -1) };
+  state.round = recordAnswer(state.round, p.q, p.res);
+  renderClozeFeedback(p.q, p.res);
+}
+
 function finishRound() {
+  commitPending();
   stopTimer();
   const sum = roundSummary(state.round);
   state.server.saveRound({
-    id: state.round.id, mode: state.round.mode, timerSec: getTimerOption(state.round.timerId).seconds,
+    id: state.round.id, mode: state.round.mode, timerSec: getTimerOption(state.round.timerId, state.round.questionTypes).seconds,
     total: state.round.size, attempted: sum.attempted, correct: sum.correct, timeouts: sum.timeouts,
-    startedAt: state.round.startedAt,
+    startedAt: state.round.startedAt, questionTypes: state.round.questionTypes, blankDisplay: state.round.blankDisplay,
+    clozeAttempted: sum.cloze.attempted, clozeCorrect: sum.cloze.correct,
   });
   $('result-title').textContent = state.round.mode === 'wrongnote' ? '오답노트 라운드 결과' : '라운드 결과';
   $('result-correct').textContent = sum.correct;
   $('result-attempted').textContent = sum.attempted;
   $('result-rate').textContent = `정답률 ${Math.round(sum.rate * 100)}%` + (sum.timeouts ? ` · 시간 초과 ${sum.timeouts}` : '');
+  const parts = [];
+  if (sum.ox.attempted) parts.push(`OX ${sum.ox.correct} / ${sum.ox.attempted}`);
+  if (sum.cloze.attempted) parts.push(`단답형 ${sum.cloze.correct} / ${sum.cloze.attempted}`);
+  if (sum.overrides) parts.push(`정답으로 인정 ${sum.overrides}`);
+  $('result-mix').textContent = parts.join(' · ');
+  $('result-mix').hidden = !(sum.cloze.attempted || sum.overrides);
   const dlg = $('result-dialog');
   if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
 }
@@ -447,9 +607,32 @@ function bind() {
   $('size-range').addEventListener('change', () => state.store.savePrefs(state.settings));
   $('timer-options').addEventListener('change', (e) => {
     if (e.target.name !== 'timer') return;
-    state.settings.timerId = getTimerOption(e.target.value).id;
+    state.settings.timerId = getTimerOption(e.target.value, state.settings.questionTypes).id;
     state.store.savePrefs(state.settings);
   });
+  $('qtype-options').addEventListener('change', (e) => {
+    if (e.target.name !== 'qtype') return;
+    state.settings.questionTypes = e.target.value;
+    // 60초는 단답형용: OX만으로 바꾸면 무제한으로 표시 (저장된 선택값은 그대로 두어 다시 바꾸면 복원)
+    fillTypeOptions(); fillTimerOptions(); updatePoolInfo(); state.store.savePrefs(state.settings);
+  });
+  $('blank-options').addEventListener('change', (e) => {
+    if (e.target.name !== 'blank') return;
+    state.settings.blankDisplay = e.target.value; state.store.savePrefs(state.settings);
+  });
+  // 단답형 입력: Enter = 다음 빈칸 / 마지막 빈칸이면 제출
+  $('cloze-form').addEventListener('submit', (e) => { e.preventDefault(); submitCloze(false); });
+  $('cloze-inputs').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    const inputs = [...$('cloze-inputs').querySelectorAll('input')];
+    const i = inputs.indexOf(e.target);
+    if (i >= 0 && i < inputs.length - 1) { e.preventDefault(); inputs[i + 1].focus(); }
+  });
+  $('giveup-btn').addEventListener('click', () => submitCloze(true));
+  $('override-btn').addEventListener('click', overrideLast);
+  window.addEventListener('pagehide', commitPending);
+  $('update-reload').addEventListener('click', () => { commitPending(); location.reload(); });
+  $('update-close').addEventListener('click', () => { $('update-toast').hidden = true; });
   // 탭이 다시 보이면 즉시 남은 시간 재계산 (숨겨진 동안 만료됐으면 바로 시간 초과 처리)
   document.addEventListener('visibilitychange', () => { if (!document.hidden && state.timer) state.timer.check(); });
   $('start-form').addEventListener('submit', (e) => { e.preventDefault(); startRound('normal'); });
@@ -491,7 +674,9 @@ function bind() {
   // 키보드(데스크톱): O/X 또는 ←/→, Enter/Space = 다음
   document.addEventListener('keydown', (e) => {
     if (!$('screen-quiz').classList.contains('active') || $('result-dialog').open) return;
+    if (e.target.closest && e.target.closest('input, textarea')) return; // 단답형 입력 중엔 단축키 없음
     const k = e.key.toLowerCase();
+    if (state.question?.type === 'cloze' && !state.answered) return;
     if (!state.answered && (k === 'o' || k === 'arrowleft')) answer('O');
     else if (!state.answered && (k === 'x' || k === 'arrowright')) answer('X');
     else if (state.answered && (k === 'enter' || k === ' ') && document.activeElement !== $('next-btn')) { e.preventDefault(); nextQuestion(); }
@@ -512,20 +697,26 @@ async function init() {
     return;
   }
   for (const s of state.data.subjects) for (const it of s.items) state.itemsById.set(it.id, it);
+  try { // 단답형 데이터 (없거나 실패하면 OX만 제공)
+    const res = await fetch(CLOZE_URL, { cache: 'no-cache' });
+    if (res.ok) state.clozeCount = attachCloze(state.data, await res.json());
+  } catch (e) { console.warn('단답형 데이터를 불러오지 못했습니다', e); }
   const prefs = await state.store.getPrefs();
   state.settings = {
     subjectId: prefs.subjectId || state.data.subjects[0].id,
     sectionKey: prefs.sectionKey || '',
     roundSize: clampRoundSize(prefs.roundSize ?? 15),
     timerId: getTimerOption(prefs.timerId).id,
+    questionTypes: QUESTION_TYPE_OPTIONS.some((o) => o.id === prefs.questionTypes) ? prefs.questionTypes : DEFAULT_QUESTION_TYPES,
+    blankDisplay: BLANK_DISPLAY_OPTIONS.some((o) => o.id === prefs.blankDisplay) ? prefs.blankDisplay : DEFAULT_BLANK_DISPLAY,
   };
   $('size-range').value = state.settings.roundSize;
   $('size-value').textContent = state.settings.roundSize;
-  fillSubjects(); fillSections(); fillTimerOptions(); updatePoolInfo();
-  $('data-version').textContent = `데이터 ${state.data.version} · ${state.data.generatedAt.slice(0, 10)}`;
+  fillSubjects(); fillSections(); fillTypeOptions(); fillTimerOptions(); updatePoolInfo();
+  $('data-version').textContent = `v${APP_VERSION} · 데이터 ${state.data.version} · ${state.data.generatedAt.slice(0, 10)}`;
   bind();
   // 디버그/테스트용 훅 (UI 동작에는 영향 없음)
-  window.__oxquiz = { state, answer, nextQuestion, startRound };
+  window.__oxquiz = { state, answer, nextQuestion, startRound, submitCloze, overrideLast };
 
   const loggedIn = await serverInit;
   if (!serverReady) {
@@ -544,6 +735,16 @@ init();
 // beforeinstallprompt 는 가로채지 않음(preventDefault 호출 안 함) → 브라우저 기본 설치 UI 유지.
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js', { scope: './' }).catch((e) => console.warn('서비스 워커 등록 실패', e));
+    navigator.serviceWorker.register('sw.js', { scope: './' }).then((reg) => {
+      // 앱을 오래 열어 둔 경우(설치형 포함) 다시 볼 때 새 버전을 확인
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch((e) => console.warn('서비스 워커 등록 실패', e));
+  });
+  // 새 서비스 워커가 페이지를 넘겨받으면(=새 버전 배포) 새로고침 안내
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return; // 첫 설치는 안내하지 않음
+    const t = document.getElementById('update-toast');
+    if (t) t.hidden = false;
   });
 }
