@@ -3,6 +3,7 @@
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_JS_URL, RECENT_ROUNDS } from './config.js';
 import { nicknameToEmail, displayNickname, validateNickname, validatePin } from './auth-utils.js';
 import { applyWrongNote, dismissWrongNote, WRONG_NOTE_CLEAR_STREAK } from './quiz-core.js';
+import { STORAGE_NS } from './config.js';
 import { SyncQueue } from './sync-queue.js';
 
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
@@ -39,7 +40,7 @@ export class SupabaseStore {
   async init() {
     const { createClient } = await import(SUPABASE_JS_URL);
     this.client = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'oxquiz.auth' },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: `${STORAGE_NS}.auth` },
     });
     const { data } = await this.client.auth.getSession();
     if (data.session) await this._setUser(data.session.user);
@@ -82,7 +83,7 @@ export class SupabaseStore {
   async _setUser(user) {
     this.user = user;
     this.queue = new SyncQueue({
-      storage: this.storage, key: `oxquiz.queue.${user.id}`,
+      storage: this.storage, key: `${STORAGE_NS}.queue.${user.id}`,
       run: (op) => this._run(op),
       onChange: (n) => this.onSyncChange(n),
     });
@@ -92,7 +93,7 @@ export class SupabaseStore {
   }
 
   // ------------------------------------------------------------------ 캐시 (오프라인에서도 화면 표시)
-  get _cacheKey() { return `oxquiz.cache.${this.user.id}`; }
+  get _cacheKey() { return `${STORAGE_NS}.cache.${this.user.id}`; }
   _loadCache() {
     try {
       const c = JSON.parse(this.storage.getItem(this._cacheKey) || 'null');
@@ -150,7 +151,11 @@ export class SupabaseStore {
         .eq('user_id', this.user.id).eq('variant_id', op.variant_id);
       return classifyError(error);
     }
-    if (op.kind === 'attempt') {
+    if (op.kind === 'attempt2') { // v2: 문제 유형·단답형 입력까지 저장
+      const { error } = await this.client.rpc('record_attempt_v2', op.args);
+      return classifyError(error);
+    }
+    if (op.kind === 'attempt') { // v1 형식 (업데이트 전에 쌓인 대기열 호환)
       const { error } = await this.client.rpc('record_attempt', op.args);
       return classifyError(error);
     }
@@ -172,6 +177,7 @@ export class SupabaseStore {
   startRound(r) {
     this.queue.push({ kind: 'round', row: {
       id: r.id, mode: r.mode, timer_sec: r.timerSec, total: r.total, started_at: new Date(r.startedAt).toISOString(),
+      question_types: r.questionTypes || 'ox', blank_display: r.blankDisplay || null,
     } });
     this.flush();
   }
@@ -179,17 +185,22 @@ export class SupabaseStore {
   /** 문항 1개 응답: 로컬 오답노트를 즉시 갱신(낙관적)하고 서버에는 record_attempt 로 원자적 처리 */
   recordAttempt(question, result, ctx) {
     const at = new Date().toISOString();
-    const variantId = question.kind === 'false' ? question.statementId : null;
+    // 오답노트·숨김에 쓰는 '변형 ID': 오지문 ID 또는 단답형 ID ('<정지문ID>-c1'), 정지문 OX 면 null
+    const variantId = question.kind === 'false' || question.type === 'cloze' ? question.statementId : null;
+    const cloze = question.type === 'cloze';
     const next = applyWrongNote(this.notes[question.itemId] || null,
       { itemId: question.itemId, correct: result.correct, mode: ctx.mode, variantId, at });
     if (next) this.notes[question.itemId] = next;
     this._rev++;
     this._saveCache();
-    this.queue.push({ kind: 'attempt', args: {
+    this.queue.push({ kind: 'attempt2', args: {
       p_client_id: uuid(), p_item_id: question.itemId, p_variant_id: variantId,
-      p_shown_type: question.answer, p_user_answer: result.choice ?? null,
+      // 단답형은 정지문 기반이므로 shown_type='O', user_answer=null (실제 입력은 p_user_text)
+      p_shown_type: cloze ? 'O' : question.answer, p_user_answer: cloze ? null : result.choice ?? null,
       p_correct: result.correct, p_timed_out: !!result.timedOut, p_mode: ctx.mode,
       p_round_id: ctx.roundId, p_created_at: at, p_clear_streak: WRONG_NOTE_CLEAR_STREAK,
+      p_question_type: cloze ? 'cloze' : 'ox', p_cloze_id: cloze ? question.clozeId : null,
+      p_user_text: cloze ? (result.userText || null) : null, p_overridden: !!result.overridden,
     } });
     this.flush();
   }
@@ -200,6 +211,8 @@ export class SupabaseStore {
       id: r.id, mode: r.mode, timer_sec: r.timerSec, total: r.total, attempted: r.attempted,
       correct: r.correct, timeouts: r.timeouts, started_at: new Date(r.startedAt).toISOString(),
       finished_at: new Date().toISOString(),
+      question_types: r.questionTypes || 'ox', blank_display: r.blankDisplay || null,
+      cloze_attempted: r.clozeAttempted || 0, cloze_correct: r.clozeCorrect || 0,
     };
     this.rounds = [row, ...this.rounds.filter((x) => x.id !== row.id)].slice(0, RECENT_ROUNDS);
     this._rev++;
