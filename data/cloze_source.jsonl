@@ -55,7 +55,7 @@
 {"item_id": "civpro1-mid-0055", "hash": "413b8686", "blanks": [{"answer": "화해신청", "accept": []}]}
 {"item_id": "civpro1-mid-0056", "hash": "ab1e2662", "blanks": [{"answer": "조정신청", "accept": []}]}
 {"item_id": "civpro1-mid-0057", "hash": "9c757b2c", "blanks": [{"answer": "보정", "accept": []}]}
-{"item_id": "civpro1-mid-0058", "hash": "98e611a6", "blanks": [{"answer": "법원사무관등", "accept": ["법원사무관"]}]}
+{"item_id": "civpro1-mid-0058", "hash": "98e611a6", "blanks": [{"answer": "법원사무관등", "accept": []}]}
 {"item_id": "civpro1-mid-0059", "hash": "4aef959a", "blanks": [{"answer": "명령", "accept": []}]}
 {"item_id": "civpro1-mid-0060", "hash": "f2b3ecea", "blanks": [{"answer": "즉시항고", "accept": []}]}
 {"item_id": "civpro1-mid-0061", "hash": "a128fbe8", "blanks": [{"answer": "증거방법", "accept": []}]}
@@ -63,7 +63,7 @@
 {"item_id": "civpro1-mid-0063", "hash": "9c5f0a2d", "blanks": [{"answer": "필수적 기재사항", "accept": []}]}
 {"item_id": "civpro1-mid-0064", "hash": "437e1796", "blanks": [{"answer": "석명권", "accept": []}]}
 {"item_id": "civpro1-mid-0065", "hash": "bbc180fd", "blanks": [{"answer": "기각", "accept": []}]}
-{"item_id": "civpro1-mid-0066", "hash": "7de45b25", "blanks": [{"answer": "법원사무관등", "accept": ["법원사무관"]}]}
+{"item_id": "civpro1-mid-0066", "hash": "7de45b25", "blanks": [{"answer": "법원사무관등", "accept": []}]}
 {"item_id": "civpro1-mid-0067", "hash": "3b984c42", "skip": "열거형 문장(적식·적법·정당성·증거조사): 하나로 복원되지 않음"}
 {"item_id": "civpro1-mid-0068", "hash": "8b0229d6", "blanks": [{"answer": "부본", "accept": []}]}
 {"item_id": "civpro1-mid-0069", "hash": "8d88f947", "blanks": [{"answer": "부본", "accept": []}]}
@@ -175,7 +175,7 @@
 {"item_id": "civpro1-mid-0175", "hash": "dc62681d", "blanks": [{"answer": "집행관", "accept": []}]}
 {"item_id": "civpro1-mid-0176", "hash": "0d92942b", "blanks": [{"answer": "영수", "accept": []}]}
 {"item_id": "civpro1-mid-0177", "hash": "d8f59c92", "blanks": [{"answer": "송달담당기관", "accept": []}]}
-{"item_id": "civpro1-mid-0178", "hash": "cf68eafd", "blanks": [{"answer": "법원사무관등", "accept": ["법원사무관"]}]}
+{"item_id": "civpro1-mid-0178", "hash": "cf68eafd", "blanks": [{"answer": "법원사무관등", "accept": []}]}
 {"item_id": "civpro1-mid-0179", "hash": "16c5bef5", "blanks": [{"answer": "촉탁", "accept": []}]}
 {"item_id": "civpro1-mid-0180", "hash": "06e05fee", "blanks": [{"answer": "우편집배원", "accept": []}]}
 {"item_id": "civpro1-mid-0181", "hash": "41b362a6", "blanks": [{"answer": "경찰공무원", "accept": []}]}
@@ -264,7 +264,7 @@
 {"item_id": "civpro1-mid-0264", "hash": "e6411585", "blanks": [{"answer": "공시송달", "accept": []}]}
 {"item_id": "civpro1-mid-0265", "hash": "2a0b6e88", "blanks": [{"answer": "공시송달처분", "accept": []}]}
 {"item_id": "civpro1-mid-0266", "hash": "dbf5fcbe", "blanks": [{"answer": "보조참가인", "accept": []}]}
-{"item_id": "civpro1-mid-0267", "hash": "b446407b", "blanks": [{"answer": "법원사무관등", "accept": ["법원사무관"]}]}
+{"item_id": "civpro1-mid-0267", "hash": "b446407b", "blanks": [{"answer": "법원사무관등", "accept": []}]}
 {"item_id": "civpro1-mid-0268", "hash": "2825c73b", "blanks": [{"answer": "폐문부재", "accept": []}]}
 {"item_id": "civpro1-mid-0269", "hash": "9295b35c", "blanks": [{"answer": "공시송달", "accept": []}]}
 {"item_id": "civpro1-mid-0270", "hash": "735e413f", "blanks": [{"answer": "폐문부재", "accept": []}]}

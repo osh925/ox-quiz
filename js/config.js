@@ -5,6 +5,6 @@ export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_xVRMYy7uKdngyyFJHQZGIA_n
 export const SUPABASE_JS_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/+esm';
 export const RECENT_ROUNDS = 10;
 // 앱 버전 (화면 아래 표시, CHANGELOG.md 와 맞춤)
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '2.0.1';
 // 기기 저장소(localStorage) 키 접두어. 미리보기(beta/) 배포 때는 별도 값으로 바꿔 본 앱과 로그인·저장 대기열이 섞이지 않게 함.
 export const STORAGE_NS = 'oxquiz';
