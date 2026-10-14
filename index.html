@@ -101,6 +101,15 @@
           <input id="size-range" type="range" min="10" max="20" step="1" value="15" />
           <span class="range-ticks small muted"><span>10</span><span>15</span><span>20</span></span>
         </label>
+        <fieldset class="field seg-group" id="qtype-field">
+          <legend>문제 유형</legend>
+          <div id="qtype-options" class="segmented" role="radiogroup"></div>
+        </fieldset>
+        <fieldset class="field seg-group" id="blank-field">
+          <legend>단답형 빈칸 표시</legend>
+          <div id="blank-options" class="segmented" role="radiogroup"></div>
+          <span class="small muted">글자 수 표시: 정답 한 글자당 O 하나 (띄어쓰기는 칸을 띄움)</span>
+        </fieldset>
         <fieldset class="field seg-group">
           <legend>문항당 제한 시간</legend>
           <div id="timer-options" class="segmented" role="radiogroup"></div>
@@ -132,10 +141,10 @@
       <ul id="notes-list" class="notes-list"></ul>
       <p id="notes-empty" class="card small muted center-text" hidden>오답노트가 비어 있어요. 문제를 풀다 틀리면 여기에 모입니다.</p>
       <details id="hidden-section" class="card hidden-section">
-        <summary>숨긴 오지문 <span id="hidden-count" class="muted"></span></summary>
-        <p class="small muted">여기 있는 오지문은 문제로 나오지 않아요. 되돌리면 다시 나와요.</p>
+        <summary>숨긴 문제 <span id="hidden-count" class="muted"></span></summary>
+        <p class="small muted">여기 있는 문제는 문제로 나오지 않아요. 되돌리면 다시 나와요.</p>
         <ul id="hidden-list" class="hidden-list"></ul>
-        <p id="hidden-empty" class="small muted">숨긴 오지문이 없어요.</p>
+        <p id="hidden-empty" class="small muted">숨긴 문제이 없어요.</p>
       </details>
       <footer class="quiz-actions">
         <button type="button" id="notes-start" class="btn primary big">오답노트로 풀기</button>
@@ -157,6 +166,7 @@
 
       <main class="quiz-main">
         <p id="q-section" class="section-path"></p>
+        <p id="q-type" class="q-type">OX</p>
         <div id="q-card" class="card statement">
           <p id="q-text"></p>
         </div>
@@ -164,8 +174,9 @@
         <div id="feedback" class="feedback" hidden aria-live="assertive">
           <span id="fb-label" class="fb-label" hidden></span>
           <div id="fb-title" class="fb-title"></div>
+          <div id="fb-cloze" class="fb-cloze" hidden></div>
           <div id="fb-original" class="fb-original" hidden>
-            <div class="small muted">원래 정지문 (바뀐 부분 강조)</div>
+            <div class="small muted" id="fb-original-label">원래 정지문 (바뀐 부분 강조)</div>
             <p id="fb-original-text"></p>
             <details id="fb-point" class="small" hidden>
               <summary>변형 포인트 보기</summary>
@@ -180,9 +191,23 @@
           <button type="button" class="btn ox o" data-choice="O" aria-label="O (맞다)">O</button>
           <button type="button" class="btn ox x" data-choice="X" aria-label="X (틀리다)">X</button>
         </div>
+        <form id="cloze-form" class="cloze-form" hidden autocomplete="off">
+          <div id="cloze-inputs" class="cloze-inputs"></div>
+          <div class="cloze-actions">
+            <button type="submit" class="btn primary big">제출</button>
+            <button type="button" id="giveup-btn" class="btn ghost">모르겠어요</button>
+          </div>
+        </form>
+        <button type="button" id="override-btn" class="btn ghost" hidden>정답으로 인정</button>
         <button type="button" id="next-btn" class="btn primary big" hidden>다음</button>
       </footer>
     </section>
+  </div>
+
+  <div id="update-toast" class="update-toast" role="status" hidden>
+    <span>새 버전이 있어요</span>
+    <button type="button" id="update-reload" class="btn primary">새로고침</button>
+    <button type="button" id="update-close" class="icon-btn" aria-label="닫기">✕</button>
   </div>
 
   <!-- 라운드 결과 모달 -->
@@ -191,6 +216,7 @@
     <p class="score"><b id="result-correct">0</b><span> / </span><span id="result-attempted">0</span></p>
     <p class="muted small">맞은 문항 수 / 시도 문항 수</p>
     <p id="result-rate" class="rate"></p>
+    <p id="result-mix" class="small muted" hidden></p>
     <div class="dialog-actions">
       <button type="button" id="again-btn" class="btn primary big">다시 하기</button>
       <button type="button" id="home-btn" class="btn ghost">처음으로</button>
@@ -209,8 +235,8 @@
       </div>
     </div>
     <div id="dismiss-step2" hidden>
-      <h2>이 오지문이 앞으로 등장하지 않게 할까요?</h2>
-      <p class="small muted">체크한 오지문은 일반·오답노트 모드 모두에서 나오지 않아요. 정지문과 다른 오지문은 계속 나와요. '숨긴 오지문'에서 되돌릴 수 있어요.</p>
+      <h2 id="hide-title">이 오지문이 앞으로 등장하지 않게 할까요?</h2>
+      <p class="small muted">체크한 문제는 일반·오답노트 모드 모두에서 나오지 않아요. 같은 정지문의 다른 문제는 계속 나와요. '숨긴 문제'에서 되돌릴 수 있어요.</p>
       <ul id="dismiss-variants" class="variant-pick"></ul>
       <div class="dialog-actions">
         <button type="button" id="hide-yes" class="btn primary big">예</button>
